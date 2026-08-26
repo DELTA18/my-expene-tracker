@@ -4,5 +4,8 @@ service cloud.firestore {
     match /expenses/{expenseId} {
       allow read, write: if true;
     }
+    match /meta/{docId} {
+      allow read, write: if true;
+    }
   }
 }

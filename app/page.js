@@ -7,14 +7,16 @@ import {
   deleteDoc,
   doc,
   onSnapshot,
+  setDoc,
 } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Pencil } from "lucide-react";
 
-const CATEGORIES = [
+const DEFAULT_CATEGORIES = [
   { key: "food", label: "Food", color: "#B87A16" },
   { key: "transport", label: "Transport", color: "#3E7CB1" },
   { key: "shopping", label: "Shopping", color: "#8B5FBF" },
@@ -23,7 +25,17 @@ const CATEGORIES = [
   { key: "fun", label: "Entertainment", color: "#C15B8C" },
   { key: "other", label: "Other", color: "#6B6F63" },
 ];
-const CATEGORY_BY_KEY = Object.fromEntries(CATEGORIES.map((c) => [c.key, c]));
+const SWATCHES = [
+  "#B87A16", "#3E7CB1", "#8B5FBF", "#B04A3F", "#2F7D5A",
+  "#C15B8C", "#6B6F63", "#2E8B87", "#4A5FC1", "#C68A3D",
+];
+const UNKNOWN_CATEGORY = { label: "Uncategorized", color: "#6B6F63" };
+
+function uid() {
+  return typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Date.now() + "-" + Math.random().toString(16).slice(2);
+}
 
 function todayStr() {
   const d = new Date();
@@ -70,8 +82,14 @@ export default function Home() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
+  const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [editingCategories, setEditingCategories] = useState(false);
+  const [categoryDraft, setCategoryDraft] = useState([]);
+  const [newCatLabel, setNewCatLabel] = useState("");
+  const [newCatColor, setNewCatColor] = useState(SWATCHES[0]);
+
   const [amount, setAmount] = useState("");
-  const [category, setCategory] = useState("food");
+  const [category, setCategory] = useState(DEFAULT_CATEGORIES[0].key);
   const [date, setDate] = useState(todayStr());
   const [note, setNote] = useState("");
 
@@ -97,9 +115,71 @@ export default function Home() {
     return unsub;
   }, []);
 
+  useEffect(() => {
+    if (!firebaseReady || !db) return;
+    const unsub = onSnapshot(doc(db, "meta", "categories"), (snap) => {
+      const data = snap.data();
+      setCategories(
+        data && Array.isArray(data.items) && data.items.length
+          ? data.items
+          : DEFAULT_CATEGORIES
+      );
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (categories.length && !categories.some((c) => c.key === category)) {
+      setCategory(categories[0].key);
+    }
+  }, [categories, category]);
+
+  const categoryByKey = useMemo(
+    () => Object.fromEntries(categories.map((c) => [c.key, c])),
+    [categories]
+  );
+
   function showToast(msg) {
     setToast(msg);
     setTimeout(() => setToast(""), 3200);
+  }
+
+  function openCategoryEditor() {
+    setCategoryDraft(categories.map((c) => ({ ...c })));
+    setNewCatLabel("");
+    setNewCatColor(SWATCHES[0]);
+    setEditingCategories(true);
+  }
+
+  function updateDraftLabel(key, label) {
+    setCategoryDraft((list) => list.map((c) => (c.key === key ? { ...c, label } : c)));
+  }
+
+  function removeDraftCategory(key) {
+    setCategoryDraft((list) => (list.length <= 1 ? list : list.filter((c) => c.key !== key)));
+  }
+
+  function addDraftCategory() {
+    const label = newCatLabel.trim();
+    if (!label) return;
+    setCategoryDraft((list) => [...list, { key: uid(), label, color: newCatColor }]);
+    setNewCatLabel("");
+  }
+
+  async function saveCategoryEditor() {
+    const cleaned = categoryDraft
+      .map((c) => ({ ...c, label: c.label.trim() }))
+      .filter((c) => c.label);
+    if (cleaned.length === 0) {
+      showToast("Keep at least one category.");
+      return;
+    }
+    try {
+      await setDoc(doc(db, "meta", "categories"), { items: cleaned });
+      setEditingCategories(false);
+    } catch {
+      showToast("Couldn't save categories. Please try again.");
+    }
   }
 
   const currentMonthExpenses = useMemo(
@@ -162,7 +242,7 @@ export default function Home() {
       setAmount("");
       setNote("");
       setDate(todayStr());
-      setCategory("food");
+      setCategory(categories[0]?.key || "");
     } catch {
       showToast("Couldn't save that expense. Please try again.");
     }
@@ -243,8 +323,8 @@ export default function Home() {
               />
             </div>
 
-            <div className="flex flex-wrap gap-2">
-              {CATEGORIES.map((c) => (
+            <div className="flex flex-wrap items-center gap-2">
+              {categories.map((c) => (
                 <button
                   key={c.key}
                   type="button"
@@ -257,7 +337,96 @@ export default function Home() {
                   {c.label}
                 </button>
               ))}
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Edit categories"
+                onClick={openCategoryEditor}
+              >
+                <Pencil />
+              </Button>
             </div>
+
+            {editingCategories && (
+              <div className="flex flex-col gap-3 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
+                <p className="text-xs font-medium text-muted-foreground">
+                  Manage categories
+                </p>
+                <div className="flex flex-col gap-2">
+                  {categoryDraft.map((c) => (
+                    <div key={c.key} className="flex items-center gap-2">
+                      <span
+                        className="dot h-2.5 w-2.5 shrink-0 rounded-full"
+                        style={{ background: c.color }}
+                      />
+                      <input
+                        type="text"
+                        value={c.label}
+                        maxLength={24}
+                        onChange={(e) => updateDraftLabel(c.key, e.target.value)}
+                        className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring"
+                      />
+                      <button
+                        type="button"
+                        className="del-btn"
+                        aria-label={`Remove ${c.label}`}
+                        disabled={categoryDraft.length <= 1}
+                        onClick={() => removeDraftCategory(c.key)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-2 pt-0.5">
+                  {SWATCHES.map((sw) => (
+                    <button
+                      key={sw}
+                      type="button"
+                      aria-label={`Pick color ${sw}`}
+                      onClick={() => setNewCatColor(sw)}
+                      className="h-5 w-5 shrink-0 rounded-full"
+                      style={{
+                        background: sw,
+                        boxShadow:
+                          newCatColor === sw
+                            ? `0 0 0 2px var(--secondary), 0 0 0 4px ${sw}`
+                            : "none",
+                      }}
+                    />
+                  ))}
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newCatLabel}
+                    maxLength={24}
+                    placeholder="New category"
+                    onChange={(e) => setNewCatLabel(e.target.value)}
+                    className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring"
+                  />
+                  <Button type="button" size="sm" variant="secondary" onClick={addDraftCategory}>
+                    Add
+                  </Button>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-0.5">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setEditingCategories(false)}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="button" size="sm" onClick={saveCategoryEditor}>
+                    Save
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <Label htmlFor="note" className="sr-only">
               Note
@@ -326,7 +495,7 @@ export default function Home() {
           ) : (
             <div className="flex flex-col gap-2.5">
               {categoryTotals.map((e) => {
-                const meta = CATEGORY_BY_KEY[e.key] || CATEGORY_BY_KEY.other;
+                const meta = categoryByKey[e.key] || UNKNOWN_CATEGORY;
                 const pct = Math.max(6, Math.round((e.amount / maxCategoryAmount) * 100));
                 return (
                   <div className="cat-row" key={e.key}>
@@ -363,7 +532,7 @@ export default function Home() {
               </div>
               <div className="flex flex-col gap-1.5">
                 {group.items.map((x) => {
-                  const meta = CATEGORY_BY_KEY[x.category] || CATEGORY_BY_KEY.other;
+                  const meta = categoryByKey[x.category] || UNKNOWN_CATEGORY;
                   return (
                     <div className="expense-row" key={x.id}>
                       <span className="dot" style={{ background: meta.color }} />
