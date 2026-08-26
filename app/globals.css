@@ -75,6 +75,14 @@
   --chart-3: #8B5FBF;
   --chart-4: #B04A3F;
   --chart-5: #2F7D5A;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #4a3aa7;
+  --series-8: #e34948;
   --radius: 0.85rem;
   --sidebar: #FFFFFF;
   --sidebar-foreground: #1B2420;
@@ -111,6 +119,14 @@
   --chart-3: #A587D6;
   --chart-4: #E0897C;
   --chart-5: #58B589;
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
   --sidebar: #1D2118;
   --sidebar-foreground: #ECEDE3;
   --sidebar-primary: #D9A22C;
@@ -147,6 +163,14 @@
     --chart-3: #A587D6;
     --chart-4: #E0897C;
     --chart-5: #58B589;
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
     --sidebar: #1D2118;
     --sidebar-foreground: #ECEDE3;
     --sidebar-primary: #D9A22C;
@@ -273,6 +297,7 @@
   overflow: hidden;
 }
 .cat-row .bar-fill {
+  display: block;
   height: 100%;
   border-radius: 999px;
 }
@@ -349,6 +374,148 @@
 
 @media (prefers-reduced-motion: reduce) {
   .toast {
+    transition: none;
+  }
+}
+
+.tabs {
+  display: inline-flex;
+  padding: 3px;
+  background: var(--secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  gap: 2px;
+}
+.tab-btn {
+  border: none;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-family: var(--font-sans);
+  font-size: 0.82rem;
+  font-weight: 500;
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.tab-btn[data-active="true"] {
+  background: var(--card);
+  color: var(--foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+
+.swatch-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.swatch-btn {
+  height: 22px;
+  width: 22px;
+  flex: none;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  background: var(--sw-color);
+}
+.swatch-btn[data-active="true"] {
+  box-shadow: 0 0 0 2px var(--secondary), 0 0 0 4px var(--sw-color);
+}
+
+.viz-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 132px;
+  padding-top: 24px;
+}
+.viz-bar-col {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.viz-bar-hit {
+  position: relative;
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: flex-end;
+  justify-content: center;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.viz-bar-hit:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.viz-bar-fill {
+  display: block;
+  width: 100%;
+  max-width: 22px;
+  height: var(--bar-h, 2%);
+  min-height: 3px;
+  border-radius: 4px 4px 2px 2px;
+  background: var(--bar-color, var(--series-1));
+  transition: opacity 0.15s ease;
+}
+.viz-bar-hit:hover .viz-bar-fill,
+.viz-bar-hit:focus-visible .viz-bar-fill {
+  opacity: 0.72;
+}
+.viz-bar-tick {
+  font-size: 0.62rem;
+  color: var(--muted-foreground);
+  line-height: 1;
+}
+.viz-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  background: var(--foreground);
+  color: var(--background);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+  padding: 4px 8px;
+  border-radius: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+  z-index: 5;
+}
+.viz-bar-col:first-child .viz-tooltip {
+  left: 0;
+  transform: translateY(4px);
+}
+.viz-bar-col:last-child .viz-tooltip {
+  left: auto;
+  right: 0;
+  transform: translateY(4px);
+}
+.viz-bar-hit:hover .viz-tooltip,
+.viz-bar-hit:focus-visible .viz-tooltip {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+.viz-bar-col:first-child .viz-bar-hit:hover .viz-tooltip,
+.viz-bar-col:first-child .viz-bar-hit:focus-visible .viz-tooltip,
+.viz-bar-col:last-child .viz-bar-hit:hover .viz-tooltip,
+.viz-bar-col:last-child .viz-bar-hit:focus-visible .viz-tooltip {
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .viz-bar-fill,
+  .viz-tooltip {
     transition: none;
   }
 }

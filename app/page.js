@@ -16,25 +16,36 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Pencil } from "lucide-react";
 
+// Slot order/hues are a validated categorical palette (see the dataviz skill's
+// reference palette) — CVD-safe adjacent pairs in both light and dark, wired to
+// --series-1..8 in globals.css. Never invent a 9th hue; reuse a slot instead.
 const DEFAULT_CATEGORIES = [
-  { key: "food", label: "Food", color: "#B87A16" },
-  { key: "transport", label: "Transport", color: "#3E7CB1" },
-  { key: "shopping", label: "Shopping", color: "#8B5FBF" },
-  { key: "bills", label: "Bills", color: "#B04A3F" },
-  { key: "health", label: "Health", color: "#2F7D5A" },
-  { key: "fun", label: "Entertainment", color: "#C15B8C" },
-  { key: "other", label: "Other", color: "#6B6F63" },
+  { key: "food", label: "Food", colorSlot: 2 },
+  { key: "transport", label: "Transport", colorSlot: 1 },
+  { key: "shopping", label: "Shopping", colorSlot: 7 },
+  { key: "bills", label: "Bills", colorSlot: 8 },
+  { key: "health", label: "Health", colorSlot: 6 },
+  { key: "fun", label: "Entertainment", colorSlot: 5 },
+  { key: "other", label: "Other", colorSlot: 3 },
 ];
-const SWATCHES = [
-  "#B87A16", "#3E7CB1", "#8B5FBF", "#B04A3F", "#2F7D5A",
-  "#C15B8C", "#6B6F63", "#2E8B87", "#4A5FC1", "#C68A3D",
-];
-const UNKNOWN_CATEGORY = { label: "Uncategorized", color: "#6B6F63" };
+const SWATCHES = [1, 2, 3, 4, 5, 6, 7, 8];
+const UNKNOWN_CATEGORY = { label: "Uncategorized" };
+
+function categoryColor(c) {
+  if (!c) return "var(--muted-foreground)";
+  if (c.colorSlot) return `var(--series-${c.colorSlot})`;
+  if (c.color) return c.color; // legacy categories saved before the validated palette
+  return "var(--muted-foreground)";
+}
 
 function uid() {
   return typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : Date.now() + "-" + Math.random().toString(16).slice(2);
+}
+
+function daysInMonth(d) {
+  return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
 }
 
 function todayStr() {
@@ -82,11 +93,14 @@ export default function Home() {
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
 
+  const [view, setView] = useState("ledger");
+
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
   const [editingCategories, setEditingCategories] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState([]);
   const [newCatLabel, setNewCatLabel] = useState("");
   const [newCatColor, setNewCatColor] = useState(SWATCHES[0]);
+  const [colorPickerFor, setColorPickerFor] = useState(null);
 
   const [amount, setAmount] = useState("");
   const [category, setCategory] = useState(DEFAULT_CATEGORIES[0].key);
@@ -145,14 +159,27 @@ export default function Home() {
   }
 
   function openCategoryEditor() {
-    setCategoryDraft(categories.map((c) => ({ ...c })));
+    // Normalize legacy hex-based categories onto the validated slot palette
+    // the moment the editor is opened, so a plain Save migrates them.
+    setCategoryDraft(
+      categories.map((c, i) => ({
+        key: c.key,
+        label: c.label,
+        colorSlot: c.colorSlot || ((i % 8) + 1),
+      }))
+    );
     setNewCatLabel("");
     setNewCatColor(SWATCHES[0]);
+    setColorPickerFor(null);
     setEditingCategories(true);
   }
 
   function updateDraftLabel(key, label) {
     setCategoryDraft((list) => list.map((c) => (c.key === key ? { ...c, label } : c)));
+  }
+
+  function updateDraftColor(key, colorSlot) {
+    setCategoryDraft((list) => list.map((c) => (c.key === key ? { ...c, colorSlot } : c)));
   }
 
   function removeDraftCategory(key) {
@@ -162,7 +189,7 @@ export default function Home() {
   function addDraftCategory() {
     const label = newCatLabel.trim();
     if (!label) return;
-    setCategoryDraft((list) => [...list, { key: uid(), label, color: newCatColor }]);
+    setCategoryDraft((list) => [...list, { key: uid(), label, colorSlot: newCatColor }]);
     setNewCatLabel("");
   }
 
@@ -226,6 +253,41 @@ export default function Home() {
     });
     return groups;
   }, [currentMonthExpenses]);
+
+  const dailySeries = useMemo(() => {
+    const nDays = daysInMonth(viewMonth);
+    const totals = new Array(nDays + 1).fill(0);
+    currentMonthExpenses.forEach((x) => {
+      const day = parseInt(x.date.slice(8, 10), 10);
+      if (day >= 1 && day <= nDays) totals[day] += x.amount;
+    });
+    return Array.from({ length: nDays }, (_, i) => ({ day: i + 1, amount: totals[i + 1] }));
+  }, [currentMonthExpenses, viewMonth]);
+  const maxDaily = Math.max(1, ...dailySeries.map((d) => d.amount));
+
+  const sixMonthSeries = useMemo(() => {
+    const months = [];
+    for (let i = 5; i >= 0; i--) {
+      const m = shiftMonth(viewMonth, -i);
+      const key = monthKey(m);
+      const amount = expenses
+        .filter((x) => x.date && x.date.slice(0, 7) === key)
+        .reduce((s, x) => s + x.amount, 0);
+      months.push({
+        key,
+        label: m.toLocaleDateString("en-IN", { month: "short" }),
+        amount,
+        isCurrent: i === 0,
+      });
+    }
+    return months;
+  }, [expenses, viewMonth]);
+  const maxSixMonth = Math.max(1, ...sixMonthSeries.map((m) => m.amount));
+
+  function fmtDayLabel(day) {
+    const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
+    return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
+  }
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -297,6 +359,27 @@ export default function Home() {
         </span>
       </header>
 
+      <div className="tabs self-start">
+        <button
+          type="button"
+          className="tab-btn"
+          data-active={view === "ledger"}
+          onClick={() => setView("ledger")}
+        >
+          Ledger
+        </button>
+        <button
+          type="button"
+          className="tab-btn"
+          data-active={view === "insights"}
+          onClick={() => setView("insights")}
+        >
+          Insights
+        </button>
+      </div>
+
+      {view === "ledger" && (
+      <>
       <Card>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
@@ -329,11 +412,11 @@ export default function Home() {
                   key={c.key}
                   type="button"
                   className="chip"
-                  style={{ "--chip-color": c.color }}
+                  style={{ "--chip-color": categoryColor(c) }}
                   data-active={category === c.key}
                   onClick={() => setCategory(c.key)}
                 >
-                  <span className="dot" style={{ background: c.color }} />
+                  <span className="dot" style={{ background: categoryColor(c) }} />
                   {c.label}
                 </button>
               ))}
@@ -355,48 +438,71 @@ export default function Home() {
                 </p>
                 <div className="flex flex-col gap-2">
                   {categoryDraft.map((c) => (
-                    <div key={c.key} className="flex items-center gap-2">
-                      <span
-                        className="dot h-2.5 w-2.5 shrink-0 rounded-full"
-                        style={{ background: c.color }}
-                      />
-                      <input
-                        type="text"
-                        value={c.label}
-                        maxLength={24}
-                        onChange={(e) => updateDraftLabel(c.key, e.target.value)}
-                        className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring"
-                      />
-                      <button
-                        type="button"
-                        className="del-btn"
-                        aria-label={`Remove ${c.label}`}
-                        disabled={categoryDraft.length <= 1}
-                        onClick={() => removeDraftCategory(c.key)}
-                      >
-                        ×
-                      </button>
+                    <div key={c.key} className="flex flex-col gap-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ background: categoryColor(c) }}
+                          aria-label={`Change color for ${c.label}`}
+                          onClick={() =>
+                            setColorPickerFor((k) => (k === c.key ? null : c.key))
+                          }
+                        />
+                        <input
+                          type="text"
+                          value={c.label}
+                          maxLength={24}
+                          onChange={(e) => updateDraftLabel(c.key, e.target.value)}
+                          className="h-8 flex-1 rounded-md border border-input bg-background px-2.5 text-sm outline-none focus-visible:border-ring"
+                        />
+                        <button
+                          type="button"
+                          className="del-btn"
+                          aria-label={`Remove ${c.label}`}
+                          disabled={categoryDraft.length <= 1}
+                          onClick={() => removeDraftCategory(c.key)}
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {colorPickerFor === c.key && (
+                        <div className="swatch-picker pl-[18px]">
+                          {SWATCHES.map((slot) => (
+                            <button
+                              key={slot}
+                              type="button"
+                              className="swatch-btn"
+                              style={{ "--sw-color": `var(--series-${slot})` }}
+                              data-active={c.colorSlot === slot}
+                              aria-label={`Pick color ${slot}`}
+                              onClick={() => {
+                                updateDraftColor(c.key, slot);
+                                setColorPickerFor(null);
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
 
                 <div className="flex items-center gap-2 pt-0.5">
-                  {SWATCHES.map((sw) => (
-                    <button
-                      key={sw}
-                      type="button"
-                      aria-label={`Pick color ${sw}`}
-                      onClick={() => setNewCatColor(sw)}
-                      className="h-5 w-5 shrink-0 rounded-full"
-                      style={{
-                        background: sw,
-                        boxShadow:
-                          newCatColor === sw
-                            ? `0 0 0 2px var(--secondary), 0 0 0 4px ${sw}`
-                            : "none",
-                      }}
-                    />
-                  ))}
+                  <span className="text-xs text-muted-foreground">New:</span>
+                  <div className="swatch-picker">
+                    {SWATCHES.map((slot) => (
+                      <button
+                        key={slot}
+                        type="button"
+                        aria-label={`Pick color ${slot}`}
+                        onClick={() => setNewCatColor(slot)}
+                        className="swatch-btn"
+                        style={{ "--sw-color": `var(--series-${slot})` }}
+                        data-active={newCatColor === slot}
+                      />
+                    ))}
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <input
@@ -477,7 +583,7 @@ export default function Home() {
             </Button>
           </div>
 
-          <div className="mb-4 flex flex-wrap items-baseline gap-2.5">
+          <div className="flex flex-wrap items-baseline gap-2.5">
             <span className="font-mono text-[2.05rem] font-semibold tabular-nums leading-none">
               {fmt(total)}
             </span>
@@ -487,32 +593,6 @@ export default function Home() {
               </span>
             )}
           </div>
-
-          {categoryTotals.length === 0 ? (
-            <p className="py-1 text-center text-sm text-muted-foreground">
-              No spending yet this month.
-            </p>
-          ) : (
-            <div className="flex flex-col gap-2.5">
-              {categoryTotals.map((e) => {
-                const meta = categoryByKey[e.key] || UNKNOWN_CATEGORY;
-                const pct = Math.max(6, Math.round((e.amount / maxCategoryAmount) * 100));
-                return (
-                  <div className="cat-row" key={e.key}>
-                    <span className="dot" style={{ background: meta.color }} />
-                    <span className="name">{meta.label}</span>
-                    <span className="bar-track">
-                      <span
-                        className="bar-fill"
-                        style={{ width: pct + "%", background: meta.color }}
-                      />
-                    </span>
-                    <span className="amt">{fmt(e.amount)}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -535,7 +615,7 @@ export default function Home() {
                   const meta = categoryByKey[x.category] || UNKNOWN_CATEGORY;
                   return (
                     <div className="expense-row" key={x.id}>
-                      <span className="dot" style={{ background: meta.color }} />
+                      <span className="dot" style={{ background: categoryColor(meta) }} />
                       <span className="min-w-0 flex-1">
                         <div className="text-sm font-medium">{meta.label}</div>
                         {x.note && (
@@ -562,6 +642,155 @@ export default function Home() {
           ))
         )}
       </div>
+      </>
+      )}
+
+      {view === "insights" && (
+        <>
+          <Card>
+            <CardContent>
+              <div className="mb-3.5 flex items-center justify-between">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Previous month"
+                  onClick={() => setViewMonth((m) => shiftMonth(m, -1))}
+                >
+                  ‹
+                </Button>
+                <span className="font-heading text-base font-semibold">
+                  {viewMonth.toLocaleDateString("en-IN", {
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </span>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  aria-label="Next month"
+                  onClick={() => setViewMonth((m) => shiftMonth(m, 1))}
+                >
+                  ›
+                </Button>
+              </div>
+
+              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Category breakdown
+              </p>
+              {categoryTotals.length === 0 ? (
+                <p className="py-1 text-center text-sm text-muted-foreground">
+                  No spending yet this month.
+                </p>
+              ) : (
+                <div className="flex flex-col gap-2.5">
+                  {categoryTotals.map((e) => {
+                    const meta = categoryByKey[e.key] || UNKNOWN_CATEGORY;
+                    const pct = Math.max(6, Math.round((e.amount / maxCategoryAmount) * 100));
+                    return (
+                      <div className="cat-row" key={e.key}>
+                        <span className="dot" style={{ background: categoryColor(meta) }} />
+                        <span className="name">{meta.label}</span>
+                        <span className="bar-track">
+                          <span
+                            className="bar-fill"
+                            style={{ width: pct + "%", background: categoryColor(meta) }}
+                          />
+                        </span>
+                        <span className="amt">{fmt(e.amount)}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent>
+              <div className="mb-3 flex items-baseline justify-between">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Daily spend —{" "}
+                  {viewMonth.toLocaleDateString("en-IN", { month: "long" })}
+                </p>
+                <span className="font-mono text-sm font-semibold tabular-nums">
+                  {fmt(total)}
+                </span>
+              </div>
+              {dailySeries.every((d) => d.amount === 0) ? (
+                <p className="py-8 text-center text-sm text-muted-foreground">
+                  No spending yet this month.
+                </p>
+              ) : (
+                <div
+                  className="viz-bars"
+                  role="img"
+                  aria-label={`Daily spending for ${viewMonth.toLocaleDateString("en-IN", { month: "long", year: "numeric" })}`}
+                >
+                  {dailySeries.map((d) => (
+                    <div className="viz-bar-col" key={d.day}>
+                      <button
+                        type="button"
+                        className="viz-bar-hit"
+                        style={{
+                          "--bar-h": Math.max(2, Math.round((d.amount / maxDaily) * 100)) + "%",
+                          "--bar-color": "var(--series-1)",
+                        }}
+                        aria-label={`${fmtDayLabel(d.day)}: ${fmt(d.amount)}`}
+                      >
+                        <span className="viz-bar-fill" />
+                        <span className="viz-tooltip">
+                          {fmtDayLabel(d.day)} · {fmt(d.amount)}
+                        </span>
+                      </button>
+                      {(d.day === 1 ||
+                        d.day === dailySeries.length ||
+                        (d.day % 5 === 0 && d.day <= dailySeries.length - 2)) && (
+                        <span className="viz-bar-tick">{d.day}</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardContent>
+              <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                Last 6 months
+              </p>
+              <div
+                className="viz-bars"
+                style={{ height: "150px" }}
+                role="img"
+                aria-label="Total spending, last 6 months"
+              >
+                {sixMonthSeries.map((m) => (
+                  <div className="viz-bar-col" key={m.key}>
+                    <button
+                      type="button"
+                      className="viz-bar-hit"
+                      style={{
+                        "--bar-h": Math.max(2, Math.round((m.amount / maxSixMonth) * 100)) + "%",
+                        "--bar-color": m.isCurrent ? "var(--primary)" : "var(--muted-foreground)",
+                      }}
+                      aria-label={`${m.label}: ${fmt(m.amount)}`}
+                    >
+                      <span className="viz-bar-fill" style={{ maxWidth: "34px" }} />
+                      <span className="viz-tooltip">
+                        {m.label} · {fmt(m.amount)}
+                      </span>
+                    </button>
+                    <span className="viz-bar-tick">{m.label}</span>
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       <div className={`toast ${toast ? "show" : ""}`}>{toast}</div>
     </div>
