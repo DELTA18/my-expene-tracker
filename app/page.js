@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Pencil } from "lucide-react";
+import { Pencil, TriangleAlert } from "lucide-react";
 
 // Slot order/hues are a validated categorical palette (see the dataviz skill's
 // reference palette) — CVD-safe adjacent pairs in both light and dark, wired to
@@ -110,6 +110,10 @@ export default function Home() {
   const [confirmId, setConfirmId] = useState(null);
   const [toast, setToast] = useState("");
 
+  const [budget, setBudget] = useState(null);
+  const [editingBudget, setEditingBudget] = useState(false);
+  const [budgetDraft, setBudgetDraft] = useState("");
+
   useEffect(() => {
     if (!firebaseReady || !db) {
       setLoading(false);
@@ -138,6 +142,15 @@ export default function Home() {
           ? data.items
           : DEFAULT_CATEGORIES
       );
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!firebaseReady || !db) return;
+    const unsub = onSnapshot(doc(db, "meta", "budget"), (snap) => {
+      const data = snap.data();
+      setBudget(typeof data?.amount === "number" ? data.amount : null);
     });
     return unsub;
   }, []);
@@ -209,6 +222,30 @@ export default function Home() {
     }
   }
 
+  function openBudgetEditor() {
+    setBudgetDraft(budget ? String(budget) : "");
+    setEditingBudget(true);
+  }
+
+  async function saveBudget() {
+    const trimmed = budgetDraft.trim();
+    try {
+      if (!trimmed) {
+        await deleteDoc(doc(db, "meta", "budget"));
+      } else {
+        const amt = parseFloat(trimmed);
+        if (!amt || amt <= 0) {
+          showToast("Enter a budget greater than zero.");
+          return;
+        }
+        await setDoc(doc(db, "meta", "budget"), { amount: Math.round(amt * 100) / 100 });
+      }
+      setEditingBudget(false);
+    } catch {
+      showToast("Couldn't save the budget. Please try again.");
+    }
+  }
+
   const currentMonthExpenses = useMemo(
     () => expenses.filter((x) => x.date && x.date.slice(0, 7) === monthKey(viewMonth)),
     [expenses, viewMonth]
@@ -225,6 +262,11 @@ export default function Home() {
   const priorTotal = priorMonthExpenses.reduce((s, x) => s + x.amount, 0);
   const deltaPct =
     priorTotal > 0 && total > 0 ? Math.round(((total - priorTotal) / priorTotal) * 100) : null;
+
+  const budgetPct = budget ? Math.round((total / budget) * 100) : null;
+  const budgetState = budgetPct === null ? null : budgetPct >= 100 ? "over" : budgetPct >= 80 ? "warning" : "good";
+  const budgetFillColor =
+    budgetState === "over" ? "var(--destructive)" : budgetState === "warning" ? "var(--warning)" : "var(--good)";
 
   const categoryTotals = useMemo(() => {
     const byCat = {};
@@ -591,6 +633,66 @@ export default function Home() {
               <span className={`delta-pill ${deltaPct > 0 ? "bad" : "good"}`}>
                 {deltaPct > 0 ? "▲" : "▼"} {Math.abs(deltaPct)}% vs last month
               </span>
+            )}
+          </div>
+
+          <div className="mt-4 border-t border-border pt-4">
+            {editingBudget ? (
+              <div className="flex items-center gap-2">
+                <div className="amount-field flex-1">
+                  <span className="currency">₹</span>
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    step="0.01"
+                    min="0"
+                    placeholder="Monthly budget"
+                    autoFocus
+                    value={budgetDraft}
+                    onChange={(e) => setBudgetDraft(e.target.value)}
+                  />
+                </div>
+                <Button type="button" variant="ghost" size="sm" onClick={() => setEditingBudget(false)}>
+                  Cancel
+                </Button>
+                <Button type="button" size="sm" onClick={saveBudget}>
+                  Save
+                </Button>
+              </div>
+            ) : budget ? (
+              <>
+                <div className="meter-head">
+                  <span className="meter-label">Budget</span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label="Edit budget"
+                    onClick={openBudgetEditor}
+                  >
+                    <Pencil />
+                  </Button>
+                </div>
+                <div className="meter-track">
+                  <div
+                    className="meter-fill"
+                    style={{ width: Math.min(100, budgetPct) + "%", background: budgetFillColor }}
+                  />
+                </div>
+                <div className="meter-sub" data-state={budgetState}>
+                  {budgetState !== "good" && <TriangleAlert className="status-icon" />}
+                  <strong>{fmt(total)}</strong> of {fmt(budget)} · {budgetPct}%
+                  {budgetState === "over" && ` — ${fmt(total - budget)} over`}
+                </div>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={openBudgetEditor}
+                className="text-xs font-medium text-muted-foreground underline underline-offset-2"
+              >
+                Set a monthly budget
+              </button>
             )}
           </div>
         </CardContent>
