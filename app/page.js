@@ -6,10 +6,20 @@ import {
   addDoc,
   deleteDoc,
   doc,
+  getDoc,
+  getDocs,
   onSnapshot,
   setDoc,
+  writeBatch,
 } from "firebase/firestore";
-import { db, firebaseReady } from "@/lib/firebase";
+import {
+  onAuthStateChanged,
+  getRedirectResult,
+  signInWithPopup,
+  signInWithRedirect,
+  signOut,
+} from "firebase/auth";
+import { auth, db, firebaseReady, googleProvider } from "@/lib/firebase";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -85,7 +95,70 @@ function formatDateHeading(dateStr) {
   });
 }
 
+// One-time copy of the old shared, no-login data into a newly signed-in
+// user's own space. Idempotent (checks a marker doc first) and safe to run
+// on every login — after the first successful run the legacy collections
+// are empty, so later logins (including other people) find nothing to move.
+async function migrateLegacyData(uid) {
+  const migratedRef = doc(db, "users", uid, "meta", "migrated");
+  const migratedSnap = await getDoc(migratedRef);
+  if (migratedSnap.exists()) return;
+
+  const [expensesSnap, catSnap, budgetSnap] = await Promise.all([
+    getDocs(collection(db, "expenses")),
+    getDoc(doc(db, "meta", "categories")),
+    getDoc(doc(db, "meta", "budget")),
+  ]);
+
+  if (expensesSnap.empty && !catSnap.exists() && !budgetSnap.exists()) {
+    await setDoc(migratedRef, { done: true, at: Date.now() });
+    return;
+  }
+
+  const batch = writeBatch(db);
+  expensesSnap.docs.forEach((d) => {
+    batch.set(doc(db, "users", uid, "expenses", d.id), d.data());
+    batch.delete(d.ref);
+  });
+  if (catSnap.exists()) {
+    batch.set(doc(db, "users", uid, "meta", "categories"), catSnap.data());
+    batch.delete(catSnap.ref);
+  }
+  if (budgetSnap.exists()) {
+    batch.set(doc(db, "users", uid, "meta", "budget"), budgetSnap.data());
+    batch.delete(budgetSnap.ref);
+  }
+  batch.set(migratedRef, { done: true, at: Date.now() });
+  await batch.commit();
+}
+
+function GoogleIcon(props) {
+  return (
+    <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" {...props}>
+      <path
+        fill="#4285F4"
+        d="M17.64 9.2c0-.64-.06-1.25-.16-1.84H9v3.48h4.84a4.14 4.14 0 0 1-1.8 2.72v2.26h2.9c1.7-1.56 2.7-3.86 2.7-6.62z"
+      />
+      <path
+        fill="#34A853"
+        d="M9 18c2.43 0 4.47-.8 5.96-2.18l-2.9-2.26c-.8.54-1.84.86-3.06.86-2.35 0-4.34-1.59-5.05-3.72H.9v2.33A9 9 0 0 0 9 18z"
+      />
+      <path
+        fill="#FBBC05"
+        d="M3.95 10.7A5.4 5.4 0 0 1 3.66 9c0-.59.1-1.17.29-1.7V4.97H.9A9 9 0 0 0 0 9c0 1.45.35 2.83.9 4.03z"
+      />
+      <path
+        fill="#EA4335"
+        d="M9 3.58c1.32 0 2.51.46 3.44 1.35l2.58-2.58C13.46.89 11.43 0 9 0A9 9 0 0 0 .9 4.97L3.95 7.3C4.66 5.17 6.65 3.58 9 3.58z"
+      />
+    </svg>
+  );
+}
+
 export default function Home() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMonth, setViewMonth] = useState(() => {
@@ -115,12 +188,32 @@ export default function Home() {
   const [budgetDraft, setBudgetDraft] = useState("");
 
   useEffect(() => {
-    if (!firebaseReady || !db) {
+    if (!firebaseReady || !auth) {
+      setAuthLoading(false);
+      return;
+    }
+    getRedirectResult(auth).catch(() => {});
+    const unsub = onAuthStateChanged(auth, (u) => {
+      setUser(u);
+      setAuthLoading(false);
+    });
+    return unsub;
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    migrateLegacyData(user.uid).catch(() => {
+      showToast("Couldn't move your old data over. It's still safe — try reloading.");
+    });
+  }, [user]);
+
+  useEffect(() => {
+    if (!firebaseReady || !db || !user) {
       setLoading(false);
       return;
     }
     const unsub = onSnapshot(
-      collection(db, "expenses"),
+      collection(db, "users", user.uid, "expenses"),
       (snap) => {
         setExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);
@@ -131,11 +224,11 @@ export default function Home() {
       }
     );
     return unsub;
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (!firebaseReady || !db) return;
-    const unsub = onSnapshot(doc(db, "meta", "categories"), (snap) => {
+    if (!firebaseReady || !db || !user) return;
+    const unsub = onSnapshot(doc(db, "users", user.uid, "meta", "categories"), (snap) => {
       const data = snap.data();
       setCategories(
         data && Array.isArray(data.items) && data.items.length
@@ -144,16 +237,42 @@ export default function Home() {
       );
     });
     return unsub;
-  }, []);
+  }, [user]);
 
   useEffect(() => {
-    if (!firebaseReady || !db) return;
-    const unsub = onSnapshot(doc(db, "meta", "budget"), (snap) => {
+    if (!firebaseReady || !db || !user) return;
+    const unsub = onSnapshot(doc(db, "users", user.uid, "meta", "budget"), (snap) => {
       const data = snap.data();
       setBudget(typeof data?.amount === "number" ? data.amount : null);
     });
     return unsub;
-  }, []);
+  }, [user]);
+
+  async function handleSignIn() {
+    if (!auth) return;
+    const standalone =
+      typeof window !== "undefined" &&
+      window.matchMedia("(display-mode: standalone)").matches;
+    try {
+      if (standalone) throw new Error("use-redirect");
+      await signInWithPopup(auth, googleProvider);
+    } catch {
+      try {
+        await signInWithRedirect(auth, googleProvider);
+      } catch {
+        showToast("Couldn't sign in. Please try again.");
+      }
+    }
+  }
+
+  async function handleSignOut() {
+    if (!auth) return;
+    try {
+      await signOut(auth);
+    } catch {
+      showToast("Couldn't sign out. Please try again.");
+    }
+  }
 
   useEffect(() => {
     if (categories.length && !categories.some((c) => c.key === category)) {
@@ -215,7 +334,7 @@ export default function Home() {
       return;
     }
     try {
-      await setDoc(doc(db, "meta", "categories"), { items: cleaned });
+      await setDoc(doc(db, "users", user.uid, "meta", "categories"), { items: cleaned });
       setEditingCategories(false);
     } catch {
       showToast("Couldn't save categories. Please try again.");
@@ -231,14 +350,16 @@ export default function Home() {
     const trimmed = budgetDraft.trim();
     try {
       if (!trimmed) {
-        await deleteDoc(doc(db, "meta", "budget"));
+        await deleteDoc(doc(db, "users", user.uid, "meta", "budget"));
       } else {
         const amt = parseFloat(trimmed);
         if (!amt || amt <= 0) {
           showToast("Enter a budget greater than zero.");
           return;
         }
-        await setDoc(doc(db, "meta", "budget"), { amount: Math.round(amt * 100) / 100 });
+        await setDoc(doc(db, "users", user.uid, "meta", "budget"), {
+          amount: Math.round(amt * 100) / 100,
+        });
       }
       setEditingBudget(false);
     } catch {
@@ -334,9 +455,9 @@ export default function Home() {
   async function handleSubmit(e) {
     e.preventDefault();
     const amt = parseFloat(amount);
-    if (!amt || amt <= 0 || !db) return;
+    if (!amt || amt <= 0 || !db || !user) return;
     try {
-      await addDoc(collection(db, "expenses"), {
+      await addDoc(collection(db, "users", user.uid, "expenses"), {
         amount: Math.round(amt * 100) / 100,
         category,
         date: date || todayStr(),
@@ -353,11 +474,11 @@ export default function Home() {
   }
 
   async function handleDelete(id) {
-    if (!db) return;
+    if (!db || !user) return;
     if (confirmId === id) {
       setConfirmId(null);
       try {
-        await deleteDoc(doc(db, "expenses", id));
+        await deleteDoc(doc(db, "users", user.uid, "expenses", id));
       } catch {
         showToast("Couldn't delete that expense. Please try again.");
       }
@@ -390,15 +511,70 @@ export default function Home() {
     );
   }
 
+  if (authLoading) {
+    return (
+      <div className="mx-auto flex min-h-svh w-full max-w-[560px] items-center justify-center px-5">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="mx-auto flex min-h-svh w-full max-w-[560px] flex-col items-center justify-center gap-6 px-5 py-10 text-center">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Pocket Ledger
+          </h1>
+          <p className="mt-1 text-xs text-muted-foreground">every rupee, logged</p>
+        </div>
+        <Card className="w-full">
+          <CardContent className="flex flex-col items-center gap-4 py-8">
+            <p className="text-sm text-muted-foreground">
+              Sign in to see and add your own expenses.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleSignIn}
+              className="h-auto gap-2.5 py-3 px-5 text-sm font-semibold"
+            >
+              <GoogleIcon /> Continue with Google
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-4 pb-20 pt-7 sm:px-5">
-      <header className="flex items-baseline justify-between gap-3 px-0.5">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Pocket Ledger
-        </h1>
-        <span className="whitespace-nowrap text-xs text-muted-foreground">
-          every rupee, logged
-        </span>
+      <header className="flex items-center justify-between gap-3 px-0.5">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Pocket Ledger
+          </h1>
+          <span className="whitespace-nowrap text-xs text-muted-foreground">
+            every rupee, logged
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          {user.photoURL ? (
+            <img
+              src={user.photoURL}
+              alt=""
+              referrerPolicy="no-referrer"
+              className="h-7 w-7 shrink-0 rounded-full"
+            />
+          ) : (
+            <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
+              {(user.displayName || user.email || "?").slice(0, 1).toUpperCase()}
+            </span>
+          )}
+          <Button type="button" variant="ghost" size="sm" onClick={handleSignOut}>
+            Sign out
+          </Button>
+        </div>
       </header>
 
       <div className="tabs self-start">

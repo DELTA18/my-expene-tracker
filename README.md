@@ -17,7 +17,7 @@ free tiers, no card required.
    You don't need Firebase Hosting.
 4. Firebase will show you a `firebaseConfig` object with values like
    `apiKey`, `authDomain`, `projectId`, etc. Keep this page open —
-   you'll copy these into `.env.local` in step 3.
+   you'll copy these into `.env.local` in step 4.
 
 ## 2. Turn on Firestore (the database)
 
@@ -28,29 +28,23 @@ free tiers, no card required.
    **production mode**.
 4. Once it's created, go to the **Rules** tab and replace the
    contents with what's in [`firestore.rules`](./firestore.rules) in
-   this project:
+   this project, then click **Publish**. Each signed-in user can only
+   read and write their own data (`/users/{their-uid}/...`) — nobody
+   else's, even with the site URL.
 
-   ```
-   rules_version = '2';
-   service cloud.firestore {
-     match /databases/{database}/documents {
-       match /expenses/{expenseId} {
-         allow read, write: if true;
-       }
-     }
-   }
-   ```
+## 3. Turn on Google sign-in
 
-   Click **Publish**.
+1. In the left sidebar of the Firebase console, go to
+   **Build → Authentication**.
+2. Click **Get started**, then under **Sign-in method** choose
+   **Google**, toggle it **Enable**, pick a support email, and click
+   **Save**.
+3. `localhost` is already an authorized domain, so sign-in works
+   locally right away. When you deploy (step 6), come back here and
+   add your live domain (e.g. `your-app.vercel.app`) under
+   **Settings → Authorized domains**, or sign-in will fail there.
 
-   **Note on privacy:** these rules let anyone who has your site's URL
-   read and write your expenses — there's no login. That's the
-   tradeoff for keeping this a zero-login, zero-friction personal
-   tool. Don't share the link publicly. If you'd like real
-   password-protected access later, that's a small follow-up (Firebase
-   Auth) — just ask.
-
-## 3. Add your config to the app
+## 4. Add your config to the app
 
 1. In this project folder, copy `.env.local.example` to `.env.local`:
 
@@ -73,17 +67,19 @@ free tiers, no card required.
    `.env.local` is already git-ignored, so these values never get
    committed.
 
-## 4. Run it locally
+## 5. Run it locally
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open http://localhost:3000 — you should be able to add an expense and
-see it in the list immediately.
+Open http://localhost:3000, sign in with Google, and you should be
+able to add an expense and see it in the list immediately. Each Google
+account that signs in gets its own private set of expenses, categories,
+and budget.
 
-## 5. Deploy for free on Vercel
+## 6. Deploy for free on Vercel
 
 1. Push this project to a GitHub repo (create one on github.com, then
    `git init`, `git add .`, `git commit`, and follow GitHub's push
