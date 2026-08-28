@@ -14,8 +14,7 @@ import {
 } from "firebase/firestore";
 import {
   onAuthStateChanged,
-  getRedirectResult,
-  signInWithRedirect,
+  signInWithPopup,
   signOut,
 } from "firebase/auth";
 import { auth, db, firebaseReady, googleProvider } from "@/lib/firebase";
@@ -139,6 +138,11 @@ function authErrorMessage(err) {
       return "Google sign-in isn't enabled yet — turn it on under Firebase Console → Authentication → Sign-in method.";
     case "auth/network-request-failed":
       return "Sign-in failed — check your connection and try again.";
+    case "auth/popup-blocked":
+      return "Your browser blocked the sign-in popup. Allow popups for this site and try again.";
+    case "auth/popup-closed-by-user":
+    case "auth/cancelled-popup-request":
+      return "";
     default:
       return "Couldn't sign in. Please try again.";
   }
@@ -205,27 +209,6 @@ export default function Home() {
       setAuthLoading(false);
       return;
     }
-    let wasPending = false;
-    try {
-      wasPending = sessionStorage.getItem("pl-auth-redirect-pending") === "1";
-    } catch {}
-    getRedirectResult(auth)
-      .then((result) => {
-        try {
-          sessionStorage.removeItem("pl-auth-redirect-pending");
-        } catch {}
-        if (!result && wasPending) {
-          setAuthError(
-            "Google didn't return a signed-in account. This can happen if the sign-in was interrupted — please try again. If it keeps happening, try clearing this site's data in your browser's settings and retry."
-          );
-        }
-      })
-      .catch((err) => {
-        try {
-          sessionStorage.removeItem("pl-auth-redirect-pending");
-        } catch {}
-        setAuthError(authErrorMessage(err));
-      });
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -285,14 +268,14 @@ export default function Home() {
     if (!auth) return;
     setAuthError("");
     try {
-      sessionStorage.setItem("pl-auth-redirect-pending", "1");
-    } catch {}
-    try {
-      // Redirect (not popup) — popups are unreliable in mobile browsers and
-      // installed PWAs, where the opener/popup message channel often breaks.
-      await signInWithRedirect(auth, googleProvider);
+      // Popup, not redirect — our authDomain (*.firebaseapp.com) is a
+      // different origin than where this app is hosted, and browsers now
+      // block the third-party storage handoff signInWithRedirect needs
+      // between those two domains. Popup avoids that relay entirely.
+      await signInWithPopup(auth, googleProvider);
     } catch (err) {
-      setAuthError(authErrorMessage(err));
+      const msg = authErrorMessage(err);
+      if (msg) setAuthError(msg);
     }
   }
 
