@@ -40,8 +40,8 @@ free tiers, no card required.
    **Google**, toggle it **Enable**, pick a support email, and click
    **Save**.
 3. `localhost` is already an authorized domain, so sign-in works
-   locally right away. When you deploy (step 6), come back here and
-   add your live domain (e.g. `your-app.vercel.app`) under
+   locally right away. For the live site, also add your Vercel domain
+   (e.g. `my-expene-tracker.vercel.app`) under
    **Settings → Authorized domains**, or sign-in will fail there.
 
 ## 4. Add your config to the app

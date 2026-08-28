@@ -15,7 +15,6 @@ import {
 import {
   onAuthStateChanged,
   getRedirectResult,
-  signInWithPopup,
   signInWithRedirect,
   signOut,
 } from "firebase/auth";
@@ -132,6 +131,19 @@ async function migrateLegacyData(uid) {
   await batch.commit();
 }
 
+function authErrorMessage(err) {
+  switch (err?.code) {
+    case "auth/unauthorized-domain":
+      return "This site isn't authorized for sign-in yet — add it under Firebase Console → Authentication → Settings → Authorized domains.";
+    case "auth/operation-not-allowed":
+      return "Google sign-in isn't enabled yet — turn it on under Firebase Console → Authentication → Sign-in method.";
+    case "auth/network-request-failed":
+      return "Sign-in failed — check your connection and try again.";
+    default:
+      return "Couldn't sign in. Please try again.";
+  }
+}
+
 function GoogleIcon(props) {
   return (
     <svg viewBox="0 0 18 18" width="18" height="18" aria-hidden="true" {...props}>
@@ -192,7 +204,9 @@ export default function Home() {
       setAuthLoading(false);
       return;
     }
-    getRedirectResult(auth).catch(() => {});
+    getRedirectResult(auth).catch((err) => {
+      showToast(authErrorMessage(err));
+    });
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -250,18 +264,12 @@ export default function Home() {
 
   async function handleSignIn() {
     if (!auth) return;
-    const standalone =
-      typeof window !== "undefined" &&
-      window.matchMedia("(display-mode: standalone)").matches;
     try {
-      if (standalone) throw new Error("use-redirect");
-      await signInWithPopup(auth, googleProvider);
-    } catch {
-      try {
-        await signInWithRedirect(auth, googleProvider);
-      } catch {
-        showToast("Couldn't sign in. Please try again.");
-      }
+      // Redirect (not popup) — popups are unreliable in mobile browsers and
+      // installed PWAs, where the opener/popup message channel often breaks.
+      await signInWithRedirect(auth, googleProvider);
+    } catch (err) {
+      showToast(authErrorMessage(err));
     }
   }
 
