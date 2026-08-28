@@ -170,6 +170,7 @@ function GoogleIcon(props) {
 export default function Home() {
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [authError, setAuthError] = useState("");
 
   const [expenses, setExpenses] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -204,9 +205,27 @@ export default function Home() {
       setAuthLoading(false);
       return;
     }
-    getRedirectResult(auth).catch((err) => {
-      showToast(authErrorMessage(err));
-    });
+    let wasPending = false;
+    try {
+      wasPending = sessionStorage.getItem("pl-auth-redirect-pending") === "1";
+    } catch {}
+    getRedirectResult(auth)
+      .then((result) => {
+        try {
+          sessionStorage.removeItem("pl-auth-redirect-pending");
+        } catch {}
+        if (!result && wasPending) {
+          setAuthError(
+            "Google didn't return a signed-in account. This can happen if the sign-in was interrupted — please try again. If it keeps happening, try clearing this site's data in your browser's settings and retry."
+          );
+        }
+      })
+      .catch((err) => {
+        try {
+          sessionStorage.removeItem("pl-auth-redirect-pending");
+        } catch {}
+        setAuthError(authErrorMessage(err));
+      });
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setAuthLoading(false);
@@ -264,12 +283,16 @@ export default function Home() {
 
   async function handleSignIn() {
     if (!auth) return;
+    setAuthError("");
+    try {
+      sessionStorage.setItem("pl-auth-redirect-pending", "1");
+    } catch {}
     try {
       // Redirect (not popup) — popups are unreliable in mobile browsers and
       // installed PWAs, where the opener/popup message channel often breaks.
       await signInWithRedirect(auth, googleProvider);
     } catch (err) {
-      showToast(authErrorMessage(err));
+      setAuthError(authErrorMessage(err));
     }
   }
 
@@ -549,6 +572,11 @@ export default function Home() {
             >
               <GoogleIcon /> Continue with Google
             </Button>
+            {authError && (
+              <p className="rounded-md bg-destructive/10 px-3 py-2 text-left text-xs text-destructive">
+                {authError}
+              </p>
+            )}
           </CardContent>
         </Card>
       </div>

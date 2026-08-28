@@ -1,4 +1,4 @@
-const CACHE = "pocket-ledger-v1";
+const CACHE = "pocket-ledger-v2";
 const SHELL = ["/"];
 
 self.addEventListener("install", (event) => {
@@ -15,13 +15,34 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// Stale-while-revalidate for the app shell only. Firestore's own requests are
-// cross-origin and never touch this cache, so real-time sync is unaffected.
+// Firestore's own requests are cross-origin and never touch this cache, so
+// real-time sync is unaffected either way.
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
 
+  // Navigations (the HTML document itself) always go to the network first.
+  // This is the request that lands when Google's OAuth redirect returns to
+  // the app — serving a cached shell here instead of the freshest deploy is
+  // exactly the kind of stale response that can break the sign-in flow.
+  // Cache is only a fallback for when there's genuinely no connection.
+  if (event.request.mode === "navigate") {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE).then((cache) => cache.put(event.request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
+  // Stale-while-revalidate for everything else (static assets).
   event.respondWith(
     caches.match(event.request).then((cached) => {
       const network = fetch(event.request)
