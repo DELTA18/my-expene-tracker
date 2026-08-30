@@ -671,6 +671,19 @@ export default function Home() {
       .map(([uid, p]) => ({ uid, username: p.username, photoURL: p.photoURL }));
   }, [expenses, peopleProfiles, user]);
 
+  // Live preview of each side's share while filling out the add-expense
+  // form — lets you see the split before submitting instead of after.
+  const splitPreview = useMemo(() => {
+    if (!splitEnabled || !splitLookup || typeof splitLookup !== "object") return null;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) return null;
+    if (splitMethod === "equal") {
+      const [mine, theirs] = equalSplit(amt);
+      return { mine, theirs };
+    }
+    return { mine: parseFloat(splitMine) || 0, theirs: parseFloat(splitTheirs) || 0 };
+  }, [splitEnabled, splitLookup, amount, splitMethod, splitMine, splitTheirs]);
+
   function fmtDayLabel(day) {
     const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -936,6 +949,7 @@ export default function Home() {
           onClick={() => setView("balances")}
         >
           Balances
+          {balances.length > 0 && <span className="tab-dot" />}
         </button>
       </div>
 
@@ -1253,6 +1267,13 @@ export default function Home() {
                           </div>
                         </div>
                       )}
+
+                      {splitPreview && (
+                        <p className="text-xs text-muted-foreground">
+                          You: <strong>{fmt(splitPreview.mine)}</strong> · {splitLookup.username}:{" "}
+                          <strong>{fmt(splitPreview.theirs)}</strong>
+                        </p>
+                      )}
                     </>
                   )}
                 </div>
@@ -1401,6 +1422,7 @@ export default function Home() {
                   const shared = x.participants && x.participants.length > 1;
                   const otherUid = shared ? x.participants.find((p) => p !== user.uid) : null;
                   const otherName = otherUid && peopleProfiles[otherUid]?.username;
+                  const otherPhoto = otherUid && peopleProfiles[otherUid]?.photoURL;
                   return (
                     <div className="expense-row" data-shared={shared} key={x.id}>
                       <span className="dot" style={{ background: color }} />
@@ -1415,7 +1437,11 @@ export default function Home() {
                         )}
                         {shared && (
                           <div className="split-badge">
-                            <Users />
+                            {otherPhoto ? (
+                              <img src={otherPhoto} alt="" referrerPolicy="no-referrer" />
+                            ) : (
+                              <Users />
+                            )}
                             {otherName || "…"} · {x.payer === user.uid ? "you paid" : "they paid"}
                           </div>
                         )}
@@ -1642,37 +1668,48 @@ export default function Home() {
               </div>
             )}
 
-            {settlingUid && (
-              <div className="mt-3 flex items-center gap-2 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
-                <div className="amount-field flex-1">
-                  <span className="currency">₹</span>
-                  <input
-                    type="number"
-                    inputMode="decimal"
-                    step="0.01"
-                    min="0"
-                    autoFocus
-                    value={settleDraft}
-                    onChange={(e) => setSettleDraft(e.target.value)}
-                  />
-                </div>
-                <Button type="button" variant="ghost" size="sm" onClick={() => setSettlingUid(null)}>
-                  Cancel
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  onClick={async () => {
-                    const amt = parseFloat(settleDraft);
-                    const bal = balances.find((b) => b.uid === settlingUid);
-                    await handleSettleUp(settlingUid, amt, bal ? bal.amount < 0 : true);
-                    setSettlingUid(null);
-                  }}
-                >
-                  Save
-                </Button>
-              </div>
-            )}
+            {settlingUid &&
+              (() => {
+                const bal = balances.find((b) => b.uid === settlingUid);
+                const iAmPaying = bal ? bal.amount < 0 : true;
+                const otherName = peopleProfiles[settlingUid]?.username || "them";
+                return (
+                  <div className="mt-3 flex flex-col gap-2 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Recording: <strong>{iAmPaying ? "You" : otherName}</strong> →{" "}
+                      <strong>{iAmPaying ? otherName : "you"}</strong>
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <div className="amount-field flex-1">
+                        <span className="currency">₹</span>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min="0"
+                          autoFocus
+                          value={settleDraft}
+                          onChange={(e) => setSettleDraft(e.target.value)}
+                        />
+                      </div>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setSettlingUid(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={async () => {
+                          const amt = parseFloat(settleDraft);
+                          await handleSettleUp(settlingUid, amt, iAmPaying);
+                          setSettlingUid(null);
+                        }}
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
           </CardContent>
         </Card>
       )}
