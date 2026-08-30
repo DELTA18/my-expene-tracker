@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   collection,
   addDoc,
@@ -68,6 +68,40 @@ function fmt(n) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
+}
+
+// Animates a displayed number toward `value` instead of snapping to it —
+// tracks the actual mid-flight value (not just the last target) so a second
+// change arriving before the first animation finishes continues smoothly
+// rather than jumping or restarting.
+function useCountUp(value, duration = 500) {
+  const [display, setDisplay] = useState(value);
+  const displayRef = useRef(value);
+  const rafRef = useRef(null);
+
+  useEffect(() => {
+    cancelAnimationFrame(rafRef.current);
+    const from = displayRef.current;
+    const to = value;
+    if (Math.abs(from - to) < 0.005) {
+      displayRef.current = to;
+      setDisplay(to);
+      return;
+    }
+    const start = performance.now();
+    function tick(now) {
+      const t = Math.min(1, (now - start) / duration);
+      const eased = 1 - Math.pow(1 - t, 3);
+      const next = from + (to - from) * eased;
+      displayRef.current = next;
+      setDisplay(next);
+      if (t < 1) rafRef.current = requestAnimationFrame(tick);
+    }
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [value, duration]);
+
+  return display;
 }
 
 function monthKey(d) {
@@ -556,6 +590,7 @@ export default function Home() {
   );
 
   const total = currentMonthExpenses.reduce((s, x) => s + myShare(x, user?.uid), 0);
+  const animatedTotal = useCountUp(total);
   const priorTotal = priorMonthExpenses.reduce((s, x) => s + myShare(x, user?.uid), 0);
   const deltaPct =
     priorTotal > 0 && total > 0 ? Math.round(((total - priorTotal) / priorTotal) * 100) : null;
@@ -1331,7 +1366,7 @@ export default function Home() {
 
           <div className="flex flex-wrap items-baseline gap-2.5">
             <span className="font-mono text-[2.05rem] font-semibold tabular-nums leading-none">
-              {fmt(total)}
+              {fmt(animatedTotal)}
             </span>
             {deltaPct !== null && deltaPct !== 0 && (
               <span className={`delta-pill ${deltaPct > 0 ? "bad" : "good"}`}>
@@ -1385,7 +1420,7 @@ export default function Home() {
                 </div>
                 <div className="meter-sub" data-state={budgetState}>
                   {budgetState !== "good" && <TriangleAlert className="status-icon" />}
-                  <strong>{fmt(total)}</strong> of {fmt(budget)} · {budgetPct}%
+                  <strong>{fmt(animatedTotal)}</strong> of {fmt(budget)} · {budgetPct}%
                   {budgetState === "over" && ` — ${fmt(total - budget)} over`}
                 </div>
               </>
@@ -1536,7 +1571,7 @@ export default function Home() {
                   {viewMonth.toLocaleDateString("en-IN", { month: "long" })}
                 </p>
                 <span className="font-mono text-sm font-semibold tabular-nums">
-                  {fmt(total)}
+                  {fmt(animatedTotal)}
                 </span>
               </div>
               {dailySeries.every((d) => d.amount === 0) ? (
