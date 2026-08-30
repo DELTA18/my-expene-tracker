@@ -260,6 +260,18 @@
   -webkit-appearance: none;
   margin: 0;
 }
+/* Smaller variant for tight side-by-side fields (e.g. custom split shares) —
+   the default 1.4rem is sized for the single main amount field and clips
+   longer placeholders like "Their share" when two sit in half the width. */
+.amount-field.sm {
+  padding: 8px 10px;
+}
+.amount-field.sm .currency {
+  font-size: 1rem;
+}
+.amount-field.sm input {
+  font-size: 0.85rem;
+}
 
 .delta-pill {
   font-size: 0.78rem;

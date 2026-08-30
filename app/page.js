@@ -1276,7 +1276,7 @@ export default function Home() {
 
                       {splitMethod === "custom" && (
                         <div className="flex items-center gap-2">
-                          <div className="amount-field flex-1">
+                          <div className="amount-field sm flex-1">
                             <span className="currency">₹</span>
                             <input
                               type="number"
@@ -1285,10 +1285,18 @@ export default function Home() {
                               min="0"
                               placeholder="Your share"
                               value={splitMine}
-                              onChange={(e) => setSplitMine(e.target.value)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setSplitMine(val);
+                                const amt = parseFloat(amount);
+                                const mine = parseFloat(val);
+                                if (amt > 0 && !isNaN(mine)) {
+                                  setSplitTheirs(String(Math.round((amt - mine) * 100) / 100));
+                                }
+                              }}
                             />
                           </div>
-                          <div className="amount-field flex-1">
+                          <div className="amount-field sm flex-1">
                             <span className="currency">₹</span>
                             <input
                               type="number"
@@ -1297,7 +1305,15 @@ export default function Home() {
                               min="0"
                               placeholder="Their share"
                               value={splitTheirs}
-                              onChange={(e) => setSplitTheirs(e.target.value)}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setSplitTheirs(val);
+                                const amt = parseFloat(amount);
+                                const theirs = parseFloat(val);
+                                if (amt > 0 && !isNaN(theirs)) {
+                                  setSplitMine(String(Math.round((amt - theirs) * 100) / 100));
+                                }
+                              }}
                             />
                           </div>
                         </div>
