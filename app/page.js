@@ -9,7 +9,9 @@ import {
   getDoc,
   getDocs,
   onSnapshot,
+  query,
   setDoc,
+  where,
   writeBatch,
 } from "firebase/firestore";
 import {
@@ -22,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Pencil, TriangleAlert } from "lucide-react";
+import { Pencil, TriangleAlert, Users } from "lucide-react";
 
 // Slot order/hues are a validated categorical palette (see the dataviz skill's
 // reference palette) — CVD-safe adjacent pairs in both light and dark, wired to
@@ -37,7 +39,6 @@ const DEFAULT_CATEGORIES = [
   { key: "other", label: "Other", colorSlot: 3 },
 ];
 const SWATCHES = [1, 2, 3, 4, 5, 6, 7, 8];
-const UNKNOWN_CATEGORY = { label: "Uncategorized" };
 
 function categoryColor(c) {
   if (!c) return "var(--muted-foreground)";
@@ -93,41 +94,69 @@ function formatDateHeading(dateStr) {
   });
 }
 
-// One-time copy of the old shared, no-login data into a newly signed-in
-// user's own space. Idempotent (checks a marker doc first) and safe to run
-// on every login — after the first successful run the legacy collections
-// are empty, so later logins (including other people) find nothing to move.
-async function migrateLegacyData(uid) {
-  const migratedRef = doc(db, "users", uid, "meta", "migrated");
+// One-time move from the old per-user expense subcollection onto the flat,
+// splittable /expenses collection every account now reads from. A personal
+// expense becomes the one-participant case of the same shape: payer,
+// createdBy and the sole participant are all this uid, and its whole amount
+// is its own "split". Category label/color are snapshotted at migration time
+// so the record renders correctly even if the category is later renamed —
+// the same reason a freshly-created shared expense snapshots them too.
+// Idempotent (checks a marker doc first), safe to run on every login.
+async function migrateToUnifiedExpenses(uid) {
+  const migratedRef = doc(db, "users", uid, "meta", "migratedToUnified");
   const migratedSnap = await getDoc(migratedRef);
   if (migratedSnap.exists()) return;
 
-  const [expensesSnap, catSnap, budgetSnap] = await Promise.all([
-    getDocs(collection(db, "expenses")),
-    getDoc(doc(db, "meta", "categories")),
-    getDoc(doc(db, "meta", "budget")),
+  const [expensesSnap, catSnap] = await Promise.all([
+    getDocs(collection(db, "users", uid, "expenses")),
+    getDoc(doc(db, "users", uid, "meta", "categories")),
   ]);
 
-  if (expensesSnap.empty && !catSnap.exists() && !budgetSnap.exists()) {
+  if (expensesSnap.empty) {
     await setDoc(migratedRef, { done: true, at: Date.now() });
     return;
   }
 
+  const categoryByKey = Object.fromEntries(
+    (catSnap.exists() && catSnap.data().items ? catSnap.data().items : DEFAULT_CATEGORIES).map(
+      (c) => [c.key, c]
+    )
+  );
+
   const batch = writeBatch(db);
   expensesSnap.docs.forEach((d) => {
-    batch.set(doc(db, "users", uid, "expenses", d.id), d.data());
+    const data = d.data();
+    const meta = categoryByKey[data.category];
+    batch.set(doc(db, "expenses", d.id), {
+      ...data,
+      payer: uid,
+      createdBy: uid,
+      participants: [uid],
+      splits: { [uid]: data.amount },
+      categoryLabel: meta?.label || "Uncategorized",
+      categoryColorSlot: meta?.colorSlot || null,
+    });
     batch.delete(d.ref);
   });
-  if (catSnap.exists()) {
-    batch.set(doc(db, "users", uid, "meta", "categories"), catSnap.data());
-    batch.delete(catSnap.ref);
-  }
-  if (budgetSnap.exists()) {
-    batch.set(doc(db, "users", uid, "meta", "budget"), budgetSnap.data());
-    batch.delete(budgetSnap.ref);
-  }
   batch.set(migratedRef, { done: true, at: Date.now() });
   await batch.commit();
+}
+
+// Splits a total into two shares that always sum back to it exactly (the
+// second share absorbs any odd paisa left over from rounding the first).
+function equalSplit(total) {
+  const a = Math.round((total / 2) * 100) / 100;
+  const b = Math.round((total - a) * 100) / 100;
+  return [a, b];
+}
+
+// A viewer's own cost for an expense — their split if one exists, otherwise
+// the full amount (defensive fallback only; every expense written by this
+// app always has splits).
+function myShare(expense, uid) {
+  return expense.splits && typeof expense.splits[uid] === "number"
+    ? expense.splits[uid]
+    : expense.amount;
 }
 
 function authErrorMessage(err) {
@@ -176,7 +205,14 @@ export default function Home() {
   const [authLoading, setAuthLoading] = useState(true);
   const [authError, setAuthError] = useState("");
 
+  const [profile, setProfile] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileNameDraft, setProfileNameDraft] = useState("");
+  const [profileUsePhoto, setProfileUsePhoto] = useState(true);
+  const [peopleProfiles, setPeopleProfiles] = useState({});
+
   const [expenses, setExpenses] = useState([]);
+  const [settlements, setSettlements] = useState([]);
   const [loading, setLoading] = useState(true);
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
@@ -197,12 +233,23 @@ export default function Home() {
   const [date, setDate] = useState(todayStr());
   const [note, setNote] = useState("");
 
+  const [splitEnabled, setSplitEnabled] = useState(false);
+  const [splitEmail, setSplitEmail] = useState("");
+  const [splitLookup, setSplitLookup] = useState(null); // "checking" | "not-found" | {uid, username, photoURL}
+  const [splitPayer, setSplitPayer] = useState("me"); // "me" | "them"
+  const [splitMethod, setSplitMethod] = useState("equal"); // "equal" | "custom"
+  const [splitMine, setSplitMine] = useState("");
+  const [splitTheirs, setSplitTheirs] = useState("");
+
   const [confirmId, setConfirmId] = useState(null);
   const [toast, setToast] = useState("");
 
   const [budget, setBudget] = useState(null);
   const [editingBudget, setEditingBudget] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState("");
+
+  const [settlingUid, setSettlingUid] = useState(null);
+  const [settleDraft, setSettleDraft] = useState("");
 
   useEffect(() => {
     if (!firebaseReady || !auth) {
@@ -218,9 +265,21 @@ export default function Home() {
 
   useEffect(() => {
     if (!user) return;
-    migrateLegacyData(user.uid).catch(() => {
+    migrateToUnifiedExpenses(user.uid).catch(() => {
       showToast("Couldn't move your old data over. It's still safe — try reloading.");
     });
+  }, [user]);
+
+  useEffect(() => {
+    if (!firebaseReady || !db || !user) {
+      setProfileLoading(false);
+      return;
+    }
+    const unsub = onSnapshot(doc(db, "profiles", user.uid), (snap) => {
+      setProfile(snap.exists() ? snap.data() : null);
+      setProfileLoading(false);
+    });
+    return unsub;
   }, [user]);
 
   useEffect(() => {
@@ -229,7 +288,7 @@ export default function Home() {
       return;
     }
     const unsub = onSnapshot(
-      collection(db, "users", user.uid, "expenses"),
+      query(collection(db, "expenses"), where("participants", "array-contains", user.uid)),
       (snap) => {
         setExpenses(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
         setLoading(false);
@@ -241,6 +300,49 @@ export default function Home() {
     );
     return unsub;
   }, [user]);
+
+  useEffect(() => {
+    if (!firebaseReady || !db || !user) return;
+    const unsub = onSnapshot(
+      query(collection(db, "settlements"), where("participants", "array-contains", user.uid)),
+      (snap) => {
+        setSettlements(snap.docs.map((d) => ({ id: d.id, ...d.data() })));
+      }
+    );
+    return unsub;
+  }, [user]);
+
+  // Resolve display name/photo for anyone else who shows up as a co-
+  // participant, one lookup per uid (not a live listener — a stale name
+  // until the next new shared expense/settlement is an acceptable tradeoff
+  // for not running N permanent listeners for people you split with).
+  useEffect(() => {
+    if (!firebaseReady || !db || !user) return;
+    const otherUids = new Set();
+    expenses.forEach((x) => (x.participants || []).forEach((p) => p !== user.uid && otherUids.add(p)));
+    settlements.forEach((s) => {
+      if (s.from !== user.uid) otherUids.add(s.from);
+      if (s.to !== user.uid) otherUids.add(s.to);
+    });
+    const missing = [...otherUids].filter((uid) => !(uid in peopleProfiles));
+    if (!missing.length) return;
+    Promise.all(
+      missing.map((uid) =>
+        getDoc(doc(db, "profiles", uid)).then((snap) => [uid, snap.exists() ? snap.data() : null])
+      )
+    ).then((pairs) => {
+      // Record every lookup, including misses (as null), so a uid with no
+      // profile doc isn't refetched on every render — that key existing at
+      // all (even set to null) is what "already checked" means here.
+      setPeopleProfiles((prev) => {
+        const next = { ...prev };
+        pairs.forEach(([uid, data]) => {
+          next[uid] = data;
+        });
+        return next;
+      });
+    });
+  }, [expenses, settlements, user, peopleProfiles]);
 
   useEffect(() => {
     if (!firebaseReady || !db || !user) return;
@@ -286,6 +388,66 @@ export default function Home() {
     } catch {
       showToast("Couldn't sign out. Please try again.");
     }
+  }
+
+  useEffect(() => {
+    if (user && !profileLoading && !profile) {
+      setProfileNameDraft((v) => v || user.displayName || "");
+    }
+  }, [user, profileLoading, profile]);
+
+  async function saveProfile(e) {
+    e.preventDefault();
+    const username = profileNameDraft.trim();
+    if (!username || !user) return;
+    const photoURL = profileUsePhoto ? user.photoURL || null : null;
+    try {
+      await setDoc(doc(db, "profiles", user.uid), { username, photoURL });
+      if (user.email) {
+        await setDoc(doc(db, "directory", user.email.toLowerCase()), { uid: user.uid });
+      }
+    } catch {
+      showToast("Couldn't save your profile. Please try again.");
+    }
+  }
+
+  async function resolveSplitEmail(rawEmail) {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email) {
+      setSplitLookup(null);
+      return;
+    }
+    if (user?.email && email === user.email.toLowerCase()) {
+      setSplitLookup("not-found");
+      return;
+    }
+    setSplitLookup("checking");
+    try {
+      const dirSnap = await getDoc(doc(db, "directory", email));
+      if (!dirSnap.exists()) {
+        setSplitLookup("not-found");
+        return;
+      }
+      const otherUid = dirSnap.data().uid;
+      const profSnap = await getDoc(doc(db, "profiles", otherUid));
+      setSplitLookup({
+        uid: otherUid,
+        username: profSnap.exists() ? profSnap.data().username : "Unknown",
+        photoURL: profSnap.exists() ? profSnap.data().photoURL : null,
+      });
+    } catch {
+      setSplitLookup("not-found");
+    }
+  }
+
+  function resetSplitFields() {
+    setSplitEnabled(false);
+    setSplitEmail("");
+    setSplitLookup(null);
+    setSplitPayer("me");
+    setSplitMethod("equal");
+    setSplitMine("");
+    setSplitTheirs("");
   }
 
   useEffect(() => {
@@ -393,8 +555,8 @@ export default function Home() {
     [expenses, viewMonth]
   );
 
-  const total = currentMonthExpenses.reduce((s, x) => s + x.amount, 0);
-  const priorTotal = priorMonthExpenses.reduce((s, x) => s + x.amount, 0);
+  const total = currentMonthExpenses.reduce((s, x) => s + myShare(x, user?.uid), 0);
+  const priorTotal = priorMonthExpenses.reduce((s, x) => s + myShare(x, user?.uid), 0);
   const deltaPct =
     priorTotal > 0 && total > 0 ? Math.round(((total - priorTotal) / priorTotal) * 100) : null;
 
@@ -403,15 +565,20 @@ export default function Home() {
   const budgetFillColor =
     budgetState === "over" ? "var(--destructive)" : budgetState === "warning" ? "var(--warning)" : "var(--good)";
 
+  // Bucketed by the snapshotted label, not the raw category key — a shared
+  // expense someone else created carries a category key from their own
+  // list, which is meaningless (or worse, coincidentally collides) against
+  // your own categories. The label snapshot is the only thing guaranteed
+  // to mean the same thing regardless of who logged it.
   const categoryTotals = useMemo(() => {
-    const byCat = {};
+    const byLabel = {};
     currentMonthExpenses.forEach((x) => {
-      byCat[x.category] = (byCat[x.category] || 0) + x.amount;
+      const label = x.categoryLabel || "Uncategorized";
+      if (!byLabel[label]) byLabel[label] = { label, colorSlot: x.categoryColorSlot, amount: 0 };
+      byLabel[label].amount += myShare(x, user?.uid);
     });
-    return Object.entries(byCat)
-      .map(([key, amount]) => ({ key, amount }))
-      .sort((a, b) => b.amount - a.amount);
-  }, [currentMonthExpenses]);
+    return Object.values(byLabel).sort((a, b) => b.amount - a.amount);
+  }, [currentMonthExpenses, user]);
   const maxCategoryAmount = categoryTotals[0]?.amount || 1;
 
   const groupedList = useMemo(() => {
@@ -436,10 +603,10 @@ export default function Home() {
     const totals = new Array(nDays + 1).fill(0);
     currentMonthExpenses.forEach((x) => {
       const day = parseInt(x.date.slice(8, 10), 10);
-      if (day >= 1 && day <= nDays) totals[day] += x.amount;
+      if (day >= 1 && day <= nDays) totals[day] += myShare(x, user?.uid);
     });
     return Array.from({ length: nDays }, (_, i) => ({ day: i + 1, amount: totals[i + 1] }));
-  }, [currentMonthExpenses, viewMonth]);
+  }, [currentMonthExpenses, viewMonth, user]);
   const maxDaily = Math.max(1, ...dailySeries.map((d) => d.amount));
 
   const sixMonthSeries = useMemo(() => {
@@ -449,7 +616,7 @@ export default function Home() {
       const key = monthKey(m);
       const amount = expenses
         .filter((x) => x.date && x.date.slice(0, 7) === key)
-        .reduce((s, x) => s + x.amount, 0);
+        .reduce((s, x) => s + myShare(x, user?.uid), 0);
       months.push({
         key,
         label: m.toLocaleDateString("en-IN", { month: "short" }),
@@ -458,8 +625,64 @@ export default function Home() {
       });
     }
     return months;
-  }, [expenses, viewMonth]);
+  }, [expenses, viewMonth, user]);
   const maxSixMonth = Math.max(1, ...sixMonthSeries.map((m) => m.amount));
+
+  // Net balance per person: positive = they owe you, negative = you owe
+  // them. Always derived from raw expenses/settlements, never stored, so it
+  // can't drift out of sync with the records it's summarizing.
+  const balances = useMemo(() => {
+    if (!user) return [];
+    const net = {};
+    expenses.forEach((x) => {
+      if (!x.participants || x.participants.length < 2) return;
+      const other = x.participants.find((p) => p !== user.uid);
+      if (!other) return;
+      if (x.payer === user.uid) net[other] = (net[other] || 0) + (x.splits?.[other] || 0);
+      else if (x.payer === other) net[other] = (net[other] || 0) - (x.splits?.[user.uid] || 0);
+    });
+    settlements.forEach((s) => {
+      const other = s.from === user.uid ? s.to : s.to === user.uid ? s.from : null;
+      if (!other) return;
+      net[other] = (net[other] || 0) + (s.from === user.uid ? s.amount : -s.amount);
+    });
+    return Object.entries(net)
+      .map(([uid, amount]) => ({ uid, amount: Math.round(amount * 100) / 100 }))
+      .filter((b) => Math.abs(b.amount) >= 0.01)
+      .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
+  }, [expenses, settlements, user]);
+
+  // People you've split an expense with before, most recent first — a
+  // one-click alternative to typing their email again. Only the profile
+  // cache already built for rendering the ledger/balances is needed here;
+  // no new data source.
+  const recentPeople = useMemo(() => {
+    if (!user) return [];
+    const seen = new Map();
+    [...expenses]
+      .filter((x) => x.participants && x.participants.length > 1)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .forEach((x) => {
+        const other = x.participants.find((p) => p !== user.uid);
+        if (other && !seen.has(other)) seen.set(other, peopleProfiles[other]);
+      });
+    return [...seen.entries()]
+      .filter(([, p]) => p)
+      .map(([uid, p]) => ({ uid, username: p.username, photoURL: p.photoURL }));
+  }, [expenses, peopleProfiles, user]);
+
+  // Live preview of each side's share while filling out the add-expense
+  // form — lets you see the split before submitting instead of after.
+  const splitPreview = useMemo(() => {
+    if (!splitEnabled || !splitLookup || typeof splitLookup !== "object") return null;
+    const amt = parseFloat(amount) || 0;
+    if (amt <= 0) return null;
+    if (splitMethod === "equal") {
+      const [mine, theirs] = equalSplit(amt);
+      return { mine, theirs };
+    }
+    return { mine: parseFloat(splitMine) || 0, theirs: parseFloat(splitTheirs) || 0 };
+  }, [splitEnabled, splitLookup, amount, splitMethod, splitMine, splitTheirs]);
 
   function fmtDayLabel(day) {
     const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
@@ -468,20 +691,55 @@ export default function Home() {
 
   async function handleSubmit(e) {
     e.preventDefault();
-    const amt = parseFloat(amount);
+    const amt = Math.round(parseFloat(amount) * 100) / 100;
     if (!amt || amt <= 0 || !db || !user) return;
+
+    let participants = [user.uid];
+    let payer = user.uid;
+    let splits = { [user.uid]: amt };
+
+    if (splitEnabled) {
+      if (!splitLookup || typeof splitLookup !== "object") {
+        showToast("Find who you're splitting with first.");
+        return;
+      }
+      const otherUid = splitLookup.uid;
+      payer = splitPayer === "me" ? user.uid : otherUid;
+      participants = [user.uid, otherUid];
+      if (splitMethod === "equal") {
+        const [a, b] = equalSplit(amt);
+        splits = { [user.uid]: a, [otherUid]: b };
+      } else {
+        const mine = Math.round(parseFloat(splitMine || "0") * 100) / 100;
+        const theirs = Math.round(parseFloat(splitTheirs || "0") * 100) / 100;
+        if (Math.abs(mine + theirs - amt) > 0.01) {
+          showToast("The two shares need to add up to the total.");
+          return;
+        }
+        splits = { [user.uid]: mine, [otherUid]: theirs };
+      }
+    }
+
+    const meta = categoryByKey[category];
     try {
-      await addDoc(collection(db, "users", user.uid, "expenses"), {
-        amount: Math.round(amt * 100) / 100,
+      await addDoc(collection(db, "expenses"), {
+        amount: amt,
         category,
+        categoryLabel: meta?.label || "Uncategorized",
+        categoryColorSlot: meta?.colorSlot || null,
         date: date || todayStr(),
         note: note.trim(),
         createdAt: Date.now(),
+        payer,
+        createdBy: user.uid,
+        participants,
+        splits,
       });
       setAmount("");
       setNote("");
       setDate(todayStr());
       setCategory(categories[0]?.key || "");
+      resetSplitFields();
     } catch {
       showToast("Couldn't save that expense. Please try again.");
     }
@@ -492,13 +750,29 @@ export default function Home() {
     if (confirmId === id) {
       setConfirmId(null);
       try {
-        await deleteDoc(doc(db, "users", user.uid, "expenses", id));
+        await deleteDoc(doc(db, "expenses", id));
       } catch {
         showToast("Couldn't delete that expense. Please try again.");
       }
     } else {
       setConfirmId(id);
       setTimeout(() => setConfirmId((c) => (c === id ? null : c)), 2500);
+    }
+  }
+
+  async function handleSettleUp(otherUid, amt, iAmPaying) {
+    if (!db || !user || !amt || amt <= 0) return;
+    try {
+      await addDoc(collection(db, "settlements"), {
+        from: iAmPaying ? user.uid : otherUid,
+        to: iAmPaying ? otherUid : user.uid,
+        amount: Math.round(amt * 100) / 100,
+        at: Date.now(),
+        participants: [user.uid, otherUid],
+        createdBy: user.uid,
+      });
+    } catch {
+      showToast("Couldn't record that settlement. Please try again.");
     }
   }
 
@@ -566,6 +840,61 @@ export default function Home() {
     );
   }
 
+  if (profileLoading) {
+    return (
+      <div className="mx-auto flex min-h-svh w-full max-w-[560px] items-center justify-center px-5">
+        <p className="text-sm text-muted-foreground">Loading…</p>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <div className="mx-auto flex min-h-svh w-full max-w-[560px] flex-col items-center justify-center gap-6 px-5 py-10 text-center">
+        <div>
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
+            Set up your profile
+          </h1>
+          <p className="mt-1 text-xs text-muted-foreground">
+            This is what people you split expenses with will see.
+          </p>
+        </div>
+        <Card className="w-full">
+          <CardContent>
+            <form onSubmit={saveProfile} className="flex flex-col gap-4 text-left">
+              <div>
+                <Label htmlFor="profile-name">Your name</Label>
+                <Input
+                  id="profile-name"
+                  type="text"
+                  required
+                  maxLength={40}
+                  placeholder="e.g. Raj"
+                  value={profileNameDraft}
+                  onChange={(e) => setProfileNameDraft(e.target.value)}
+                  className="!h-auto mt-1.5 rounded-[calc(var(--radius)-2px)] border-input bg-secondary px-3.5 py-2.5 text-sm"
+                />
+              </div>
+              {user.photoURL && (
+                <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={profileUsePhoto}
+                    onChange={(e) => setProfileUsePhoto(e.target.checked)}
+                  />
+                  Use my Google account photo
+                </label>
+              )}
+              <Button type="submit" className="h-auto py-3 text-sm font-semibold">
+                Save and continue
+              </Button>
+            </form>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-4 pb-20 pt-7 sm:px-5">
       <header className="flex items-center justify-between gap-3 px-0.5">
@@ -578,16 +907,16 @@ export default function Home() {
           </span>
         </div>
         <div className="flex items-center gap-2">
-          {user.photoURL ? (
+          {profile.photoURL ? (
             <img
-              src={user.photoURL}
+              src={profile.photoURL}
               alt=""
               referrerPolicy="no-referrer"
               className="h-7 w-7 shrink-0 rounded-full"
             />
           ) : (
             <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
-              {(user.displayName || user.email || "?").slice(0, 1).toUpperCase()}
+              {profile.username.slice(0, 1).toUpperCase()}
             </span>
           )}
           <Button type="button" variant="ghost" size="sm" onClick={handleSignOut}>
@@ -612,6 +941,15 @@ export default function Home() {
           onClick={() => setView("insights")}
         >
           Insights
+        </button>
+        <button
+          type="button"
+          className="tab-btn"
+          data-active={view === "balances"}
+          onClick={() => setView("balances")}
+        >
+          Balances
+          {balances.length > 0 && <span className="tab-dot" />}
         </button>
       </div>
 
@@ -771,6 +1109,177 @@ export default function Home() {
               </div>
             )}
 
+            <div className="flex flex-col gap-2">
+              <label className="flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={splitEnabled}
+                  onChange={(e) => {
+                    setSplitEnabled(e.target.checked);
+                    if (!e.target.checked) resetSplitFields();
+                  }}
+                />
+                Split with someone
+              </label>
+
+              {splitEnabled && (
+                <div className="flex flex-col gap-3 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
+                  {recentPeople.length > 0 && (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">Recent</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {recentPeople.map((p) => (
+                          <button
+                            key={p.uid}
+                            type="button"
+                            className="chip"
+                            data-active={splitLookup?.uid === p.uid}
+                            onClick={() => {
+                              setSplitLookup(p);
+                              setSplitEmail("");
+                            }}
+                          >
+                            {p.photoURL ? (
+                              <img
+                                src={p.photoURL}
+                                alt=""
+                                referrerPolicy="no-referrer"
+                                className="h-4 w-4 rounded-full"
+                              />
+                            ) : (
+                              <span className="dot" style={{ background: "var(--muted-foreground)" }} />
+                            )}
+                            {p.username}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  <div>
+                    <Label htmlFor="split-email" className="text-xs font-medium text-muted-foreground">
+                      {recentPeople.length > 0 ? "Or someone new — their email" : "Their email"}
+                    </Label>
+                    <Input
+                      id="split-email"
+                      type="email"
+                      placeholder="friend@example.com"
+                      value={splitEmail}
+                      onChange={(e) => {
+                        setSplitEmail(e.target.value);
+                        setSplitLookup(null);
+                      }}
+                      onBlur={(e) => resolveSplitEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          resolveSplitEmail(e.currentTarget.value);
+                        }
+                      }}
+                      className="!h-auto mt-1 rounded-[calc(var(--radius)-2px)] border-input bg-background px-3 py-2 text-sm"
+                    />
+                    {splitLookup === "checking" && (
+                      <p className="mt-1 text-xs text-muted-foreground">Looking them up…</p>
+                    )}
+                    {splitLookup === "not-found" && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        No account found for that email — they need to sign in to Pocket
+                        Ledger once first.
+                      </p>
+                    )}
+                    {splitLookup && typeof splitLookup === "object" && (
+                      <p className="mt-1 text-xs" style={{ color: "var(--good)" }}>
+                        Splitting with {splitLookup.username}
+                      </p>
+                    )}
+                  </div>
+
+                  {splitLookup && typeof splitLookup === "object" && (
+                    <>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-muted-foreground">Paid by</span>
+                        <div className="tabs">
+                          <button
+                            type="button"
+                            className="tab-btn"
+                            data-active={splitPayer === "me"}
+                            onClick={() => setSplitPayer("me")}
+                          >
+                            You
+                          </button>
+                          <button
+                            type="button"
+                            className="tab-btn"
+                            data-active={splitPayer === "them"}
+                            onClick={() => setSplitPayer("them")}
+                          >
+                            {splitLookup.username}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-medium text-muted-foreground">Split</span>
+                        <div className="tabs">
+                          <button
+                            type="button"
+                            className="tab-btn"
+                            data-active={splitMethod === "equal"}
+                            onClick={() => setSplitMethod("equal")}
+                          >
+                            Equal
+                          </button>
+                          <button
+                            type="button"
+                            className="tab-btn"
+                            data-active={splitMethod === "custom"}
+                            onClick={() => setSplitMethod("custom")}
+                          >
+                            Custom
+                          </button>
+                        </div>
+                      </div>
+
+                      {splitMethod === "custom" && (
+                        <div className="flex items-center gap-2">
+                          <div className="amount-field flex-1">
+                            <span className="currency">₹</span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              min="0"
+                              placeholder="Your share"
+                              value={splitMine}
+                              onChange={(e) => setSplitMine(e.target.value)}
+                            />
+                          </div>
+                          <div className="amount-field flex-1">
+                            <span className="currency">₹</span>
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              step="0.01"
+                              min="0"
+                              placeholder="Their share"
+                              value={splitTheirs}
+                              onChange={(e) => setSplitTheirs(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                      )}
+
+                      {splitPreview && (
+                        <p className="text-xs text-muted-foreground">
+                          You: <strong>{fmt(splitPreview.mine)}</strong> · {splitLookup.username}:{" "}
+                          <strong>{fmt(splitPreview.theirs)}</strong>
+                        </p>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+
             <Label htmlFor="note" className="sr-only">
               Note
             </Label>
@@ -909,28 +1418,46 @@ export default function Home() {
               </div>
               <div className="flex flex-col gap-1.5">
                 {group.items.map((x) => {
-                  const meta = categoryByKey[x.category] || UNKNOWN_CATEGORY;
+                  const color = categoryColor({ colorSlot: x.categoryColorSlot });
+                  const shared = x.participants && x.participants.length > 1;
+                  const otherUid = shared ? x.participants.find((p) => p !== user.uid) : null;
+                  const otherName = otherUid && peopleProfiles[otherUid]?.username;
+                  const otherPhoto = otherUid && peopleProfiles[otherUid]?.photoURL;
                   return (
-                    <div className="expense-row" key={x.id}>
-                      <span className="dot" style={{ background: categoryColor(meta) }} />
+                    <div className="expense-row" data-shared={shared} key={x.id}>
+                      <span className="dot" style={{ background: color }} />
                       <span className="min-w-0 flex-1">
-                        <div className="text-sm font-medium">{meta.label}</div>
+                        <div className="text-sm font-medium">
+                          {x.categoryLabel || "Uncategorized"}
+                        </div>
                         {x.note && (
                           <div className="truncate text-xs text-muted-foreground/80">
                             {x.note}
                           </div>
                         )}
+                        {shared && (
+                          <div className="split-badge">
+                            {otherPhoto ? (
+                              <img src={otherPhoto} alt="" referrerPolicy="no-referrer" />
+                            ) : (
+                              <Users />
+                            )}
+                            {otherName || "…"} · {x.payer === user.uid ? "you paid" : "they paid"}
+                          </div>
+                        )}
                       </span>
-                      <span className="amt">{fmt(x.amount)}</span>
-                      <button
-                        type="button"
-                        className="del-btn"
-                        data-confirm={confirmId === x.id}
-                        aria-label="Delete expense"
-                        onClick={() => handleDelete(x.id)}
-                      >
-                        {confirmId === x.id ? "Confirm" : "×"}
-                      </button>
+                      <span className="amt">{fmt(myShare(x, user.uid))}</span>
+                      {x.createdBy === user.uid && (
+                        <button
+                          type="button"
+                          className="del-btn"
+                          data-confirm={confirmId === x.id}
+                          aria-label="Delete expense"
+                          onClick={() => handleDelete(x.id)}
+                        >
+                          {confirmId === x.id ? "Confirm" : "×"}
+                        </button>
+                      )}
                     </div>
                   );
                 })}
@@ -983,17 +1510,14 @@ export default function Home() {
               ) : (
                 <div className="flex flex-col gap-2.5">
                   {categoryTotals.map((e) => {
-                    const meta = categoryByKey[e.key] || UNKNOWN_CATEGORY;
+                    const color = categoryColor({ colorSlot: e.colorSlot });
                     const pct = Math.max(6, Math.round((e.amount / maxCategoryAmount) * 100));
                     return (
-                      <div className="cat-row" key={e.key}>
-                        <span className="dot" style={{ background: categoryColor(meta) }} />
-                        <span className="name">{meta.label}</span>
+                      <div className="cat-row" key={e.label}>
+                        <span className="dot" style={{ background: color }} />
+                        <span className="name">{e.label}</span>
                         <span className="bar-track">
-                          <span
-                            className="bar-fill"
-                            style={{ width: pct + "%", background: categoryColor(meta) }}
-                          />
+                          <span className="bar-fill" style={{ width: pct + "%", background: color }} />
                         </span>
                         <span className="amt">{fmt(e.amount)}</span>
                       </div>
@@ -1087,6 +1611,107 @@ export default function Home() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {view === "balances" && (
+        <Card>
+          <CardContent>
+            {balances.length === 0 ? (
+              <p className="py-8 text-center text-sm text-muted-foreground">
+                No shared expenses yet. Split one from the Ledger tab to see balances here.
+              </p>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                {balances.map((b) => {
+                  const person = peopleProfiles[b.uid];
+                  const theyOweMe = b.amount > 0;
+                  return (
+                    <div className="expense-row" key={b.uid}>
+                      {person?.photoURL ? (
+                        <img
+                          src={person.photoURL}
+                          alt=""
+                          referrerPolicy="no-referrer"
+                          className="h-8 w-8 shrink-0 rounded-full"
+                        />
+                      ) : (
+                        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold">
+                          {(person?.username || "?").slice(0, 1).toUpperCase()}
+                        </span>
+                      )}
+                      <span className="min-w-0 flex-1">
+                        <div className="text-sm font-medium">{person?.username || "Unknown"}</div>
+                        <div className="text-xs text-muted-foreground/80">
+                          {theyOweMe ? "owes you" : "you owe"}
+                        </div>
+                      </span>
+                      <span
+                        className="amt"
+                        style={{ color: theyOweMe ? "var(--good)" : "var(--destructive)" }}
+                      >
+                        {fmt(Math.abs(b.amount))}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setSettlingUid(b.uid);
+                          setSettleDraft(String(Math.abs(b.amount)));
+                        }}
+                      >
+                        Settle up
+                      </Button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {settlingUid &&
+              (() => {
+                const bal = balances.find((b) => b.uid === settlingUid);
+                const iAmPaying = bal ? bal.amount < 0 : true;
+                const otherName = peopleProfiles[settlingUid]?.username || "them";
+                return (
+                  <div className="mt-3 flex flex-col gap-2 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
+                    <p className="text-xs text-muted-foreground">
+                      Recording: <strong>{iAmPaying ? "You" : otherName}</strong> →{" "}
+                      <strong>{iAmPaying ? otherName : "you"}</strong>
+                    </p>
+                    <div className="flex items-center gap-2">
+                      <div className="amount-field flex-1">
+                        <span className="currency">₹</span>
+                        <input
+                          type="number"
+                          inputMode="decimal"
+                          step="0.01"
+                          min="0"
+                          autoFocus
+                          value={settleDraft}
+                          onChange={(e) => setSettleDraft(e.target.value)}
+                        />
+                      </div>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setSettlingUid(null)}>
+                        Cancel
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={async () => {
+                          const amt = parseFloat(settleDraft);
+                          await handleSettleUp(settlingUid, amt, iAmPaying);
+                          setSettlingUid(null);
+                        }}
+                      >
+                        Save
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })()}
+          </CardContent>
+        </Card>
       )}
 
       <div className={`toast ${toast ? "show" : ""}`}>{toast}</div>

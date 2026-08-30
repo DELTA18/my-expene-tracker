@@ -323,9 +323,34 @@
   border-radius: calc(var(--radius) - 4px);
   padding: 12px;
 }
+.expense-row[data-shared="true"] {
+  border-left: 3px solid var(--primary);
+}
 .expense-row .dot {
   width: 9px;
   height: 9px;
+  border-radius: 50%;
+  flex: none;
+}
+.split-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+}
+.split-badge svg {
+  width: 11px;
+  height: 11px;
+}
+.split-badge img {
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   flex: none;
 }
@@ -405,6 +430,15 @@
   background: var(--card);
   color: var(--foreground);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.tab-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--primary);
+  vertical-align: middle;
 }
 
 .swatch-picker {
