@@ -24,7 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Pencil, TriangleAlert } from "lucide-react";
+import { Pencil, TriangleAlert, Users } from "lucide-react";
 
 // Slot order/hues are a validated categorical palette (see the dataviz skill's
 // reference palette) — CVD-safe adjacent pairs in both light and dark, wired to
@@ -1402,7 +1402,7 @@ export default function Home() {
                   const otherUid = shared ? x.participants.find((p) => p !== user.uid) : null;
                   const otherName = otherUid && peopleProfiles[otherUid]?.username;
                   return (
-                    <div className="expense-row" key={x.id}>
+                    <div className="expense-row" data-shared={shared} key={x.id}>
                       <span className="dot" style={{ background: color }} />
                       <span className="min-w-0 flex-1">
                         <div className="text-sm font-medium">
@@ -1414,8 +1414,9 @@ export default function Home() {
                           </div>
                         )}
                         {shared && (
-                          <div className="truncate text-xs text-muted-foreground/80">
-                            Split with {otherName || "…"} · {x.payer === user.uid ? "You paid" : `${otherName || "They"} paid`}
+                          <div className="split-badge">
+                            <Users />
+                            {otherName || "…"} · {x.payer === user.uid ? "you paid" : "they paid"}
                           </div>
                         )}
                       </span>
