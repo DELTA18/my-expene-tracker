@@ -652,6 +652,25 @@ export default function Home() {
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
   }, [expenses, settlements, user]);
 
+  // People you've split an expense with before, most recent first — a
+  // one-click alternative to typing their email again. Only the profile
+  // cache already built for rendering the ledger/balances is needed here;
+  // no new data source.
+  const recentPeople = useMemo(() => {
+    if (!user) return [];
+    const seen = new Map();
+    [...expenses]
+      .filter((x) => x.participants && x.participants.length > 1)
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+      .forEach((x) => {
+        const other = x.participants.find((p) => p !== user.uid);
+        if (other && !seen.has(other)) seen.set(other, peopleProfiles[other]);
+      });
+    return [...seen.entries()]
+      .filter(([, p]) => p)
+      .map(([uid, p]) => ({ uid, username: p.username, photoURL: p.photoURL }));
+  }, [expenses, peopleProfiles, user]);
+
   function fmtDayLabel(day) {
     const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
     return d.toLocaleDateString("en-IN", { day: "numeric", month: "short" });
@@ -1091,9 +1110,40 @@ export default function Home() {
 
               {splitEnabled && (
                 <div className="flex flex-col gap-3 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
+                  {recentPeople.length > 0 && (
+                    <div className="flex flex-col gap-1.5">
+                      <span className="text-xs font-medium text-muted-foreground">Recent</span>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {recentPeople.map((p) => (
+                          <button
+                            key={p.uid}
+                            type="button"
+                            className="chip"
+                            data-active={splitLookup?.uid === p.uid}
+                            onClick={() => {
+                              setSplitLookup(p);
+                              setSplitEmail("");
+                            }}
+                          >
+                            {p.photoURL ? (
+                              <img
+                                src={p.photoURL}
+                                alt=""
+                                referrerPolicy="no-referrer"
+                                className="h-4 w-4 rounded-full"
+                              />
+                            ) : (
+                              <span className="dot" style={{ background: "var(--muted-foreground)" }} />
+                            )}
+                            {p.username}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div>
                     <Label htmlFor="split-email" className="text-xs font-medium text-muted-foreground">
-                      Their email
+                      {recentPeople.length > 0 ? "Or someone new — their email" : "Their email"}
                     </Label>
                     <Input
                       id="split-email"
