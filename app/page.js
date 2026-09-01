@@ -24,6 +24,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Pencil, TriangleAlert, Users } from "lucide-react";
 
 // Slot order/hues are a validated categorical palette (see the dataviz skill's
@@ -1044,7 +1045,7 @@ export default function Home() {
 
       {view === "ledger" && (
       <>
-      <Card>
+      <Card className="fade-in-up">
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
             <div className="flex items-stretch gap-2.5">
@@ -1206,17 +1207,19 @@ export default function Home() {
             )}
 
             <div className="flex flex-col gap-2">
-              <label className="flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
+              <div className="flex items-center gap-2">
+                <Switch
+                  id="split-toggle"
                   checked={splitEnabled}
-                  onChange={(e) => {
-                    setSplitEnabled(e.target.checked);
-                    if (!e.target.checked) resetSplitFields();
+                  onCheckedChange={(checked) => {
+                    setSplitEnabled(checked);
+                    if (!checked) resetSplitFields();
                   }}
                 />
-                Split with someone
-              </label>
+                <Label htmlFor="split-toggle" className="text-sm text-muted-foreground">
+                  Split with someone
+                </Label>
+              </div>
 
               {splitEnabled && (
                 <div className="flex flex-col gap-3 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
@@ -1412,7 +1415,7 @@ export default function Home() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="fade-in-up" style={{ "--fade-delay": "80ms" }}>
         <CardContent>
           <div className="mb-3.5 flex items-center justify-between">
             <Button
@@ -1583,7 +1586,7 @@ export default function Home() {
 
       {view === "insights" && (
         <>
-          <Card>
+          <Card className="fade-in-up">
             <CardContent>
               <div className="mb-3.5 flex items-center justify-between">
                 <Button
@@ -1640,7 +1643,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="fade-in-up" style={{ "--fade-delay": "80ms" }}>
             <CardContent>
               <div className="mb-3 flex items-baseline justify-between">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -1689,7 +1692,7 @@ export default function Home() {
             </CardContent>
           </Card>
 
-          <Card>
+          <Card className="fade-in-up" style={{ "--fade-delay": "160ms" }}>
             <CardContent>
               <p className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                 Last 6 months

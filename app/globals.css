@@ -347,7 +347,7 @@
   flex: none;
 }
 
-@keyframes expense-row-in {
+@keyframes fade-in-up {
   from {
     opacity: 0;
     transform: translateY(-6px);
@@ -357,6 +357,10 @@
     transform: translateY(0);
   }
 }
+.fade-in-up {
+  animation: fade-in-up 0.25s ease both;
+  animation-delay: var(--fade-delay, 0ms);
+}
 .expense-row {
   display: flex;
   align-items: center;
@@ -365,7 +369,7 @@
   border: 1px solid var(--border);
   border-radius: calc(var(--radius) - 4px);
   padding: 12px;
-  animation: expense-row-in 0.25s ease;
+  animation: fade-in-up 0.25s ease;
 }
 .expense-row[data-shared="true"] {
   border-left: 3px solid var(--primary);
@@ -601,7 +605,8 @@
   .cat-row .bar-fill {
     transition: none;
   }
-  .expense-row {
+  .expense-row,
+  .fade-in-up {
     animation: none;
   }
 }
