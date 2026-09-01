@@ -256,6 +256,7 @@ export default function Home() {
   const [view, setView] = useState("ledger");
 
   const [categories, setCategories] = useState(DEFAULT_CATEGORIES);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
   const [editingCategories, setEditingCategories] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState([]);
   const [newCatLabel, setNewCatLabel] = useState("");
@@ -379,6 +380,7 @@ export default function Home() {
   }, [expenses, settlements, user, peopleProfiles]);
 
   useEffect(() => {
+    setCategoriesLoaded(false);
     if (!firebaseReady || !db || !user) return;
     const unsub = onSnapshot(doc(db, "users", user.uid, "meta", "categories"), (snap) => {
       const data = snap.data();
@@ -387,9 +389,38 @@ export default function Home() {
           ? data.items
           : DEFAULT_CATEGORIES
       );
+      setCategoriesLoaded(true);
     });
     return unsub;
   }, [user]);
+
+  // A category from someone else's shared expense that you don't have yet
+  // gets copied into your own list automatically (same name/color, a new key
+  // that's fully yours from then on — no ongoing link back to theirs).
+  // Gated on categoriesLoaded (not just categories.length, which is always
+  // >0 thanks to the DEFAULT_CATEGORIES fallback) so this can't fire against
+  // that fallback before the real Firestore doc has loaded even once — doing
+  // so would overwrite your saved list and silently drop anything in it that
+  // isn't referenced by an expense yet (e.g. a category you just created).
+  useEffect(() => {
+    if (!firebaseReady || !db || !user || !categoriesLoaded) return;
+    const known = new Set(categories.map((c) => c.label));
+    const missing = new Map();
+    expenses.forEach((x) => {
+      if (x.categoryLabel && !known.has(x.categoryLabel) && !missing.has(x.categoryLabel)) {
+        missing.set(x.categoryLabel, x.categoryColorSlot);
+      }
+    });
+    if (missing.size === 0) return;
+    const additions = [...missing.entries()].map(([label, colorSlot], i) => ({
+      key: uid(),
+      label,
+      colorSlot: colorSlot || (((categories.length + i) % 8) + 1),
+    }));
+    setDoc(doc(db, "users", user.uid, "meta", "categories"), {
+      items: [...categories, ...additions],
+    }).catch(() => {});
+  }, [expenses, categories, categoriesLoaded, user]);
 
   useEffect(() => {
     if (!firebaseReady || !db || !user) return;
@@ -494,6 +525,29 @@ export default function Home() {
     () => Object.fromEntries(categories.map((c) => [c.key, c])),
     [categories]
   );
+
+  // Quick-pick order: most-used categories first, computed from expenses
+  // already loaded (yours and shared-with-you, matched by name so a shared
+  // expense someone else logged counts too) — no stored counter, no extra
+  // reads, and it only shifts as usage actually accumulates, not on every
+  // add, so the layout stays predictable.
+  const categoryUsageOrder = useMemo(() => {
+    const counts = {};
+    expenses.forEach((x) => {
+      if (x.categoryLabel) counts[x.categoryLabel] = (counts[x.categoryLabel] || 0) + 1;
+    });
+    return [...categories].sort(
+      (a, b) => (counts[b.label] || 0) - (counts[a.label] || 0)
+    );
+  }, [categories, expenses]);
+
+  // Split into two independent rows (top = more-used half) rather than a
+  // grid/flex-wrap pairing, which would force each row-0/row-1 pair to share
+  // a column width and leave gaps after the shorter one.
+  const categoryRows = useMemo(() => {
+    const half = Math.ceil(categoryUsageOrder.length / 2);
+    return [categoryUsageOrder.slice(0, half), categoryUsageOrder.slice(half)];
+  }, [categoryUsageOrder]);
 
   function showToast(msg) {
     setToast(msg);
@@ -1016,26 +1070,33 @@ export default function Home() {
               />
             </div>
 
-            <div className="flex flex-wrap items-center gap-2">
-              {categories.map((c) => (
-                <button
-                  key={c.key}
-                  type="button"
-                  className="chip"
-                  style={{ "--chip-color": categoryColor(c) }}
-                  data-active={category === c.key}
-                  onClick={() => setCategory(c.key)}
-                >
-                  <span className="dot" style={{ background: categoryColor(c) }} />
-                  {c.label}
-                </button>
-              ))}
+            <div className="flex items-center gap-2">
+              <div className="cat-picker">
+                {categoryRows.map((row, i) => (
+                  <div className="cat-picker-row" key={i}>
+                    {row.map((c) => (
+                      <button
+                        key={c.key}
+                        type="button"
+                        className="chip"
+                        style={{ "--chip-color": categoryColor(c) }}
+                        data-active={category === c.key}
+                        onClick={() => setCategory(c.key)}
+                      >
+                        <span className="dot" style={{ background: categoryColor(c) }} />
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
+                ))}
+              </div>
               <Button
                 type="button"
                 variant="ghost"
                 size="icon-sm"
                 aria-label="Edit categories"
                 onClick={openCategoryEditor}
+                className="shrink-0"
               >
                 <Pencil />
               </Button>

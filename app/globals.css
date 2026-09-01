@@ -202,6 +202,25 @@
   --font-heading: var(--font-display);
 }
 
+.cat-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.cat-picker::-webkit-scrollbar {
+  display: none;
+}
+.cat-picker-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+}
+
 .chip {
   display: inline-flex;
   align-items: center;
@@ -214,6 +233,7 @@
   font-size: 0.82rem;
   cursor: pointer;
   font-family: var(--font-sans);
+  white-space: nowrap;
 }
 .chip .dot {
   width: 8px;
