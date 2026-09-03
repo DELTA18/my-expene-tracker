@@ -177,12 +177,14 @@ async function migrateToUnifiedExpenses(uid) {
   await batch.commit();
 }
 
-// Splits a total into two shares that always sum back to it exactly (the
-// second share absorbs any odd paisa left over from rounding the first).
-function equalSplit(total) {
-  const a = Math.round((total / 2) * 100) / 100;
-  const b = Math.round((total - a) * 100) / 100;
-  return [a, b];
+// Splits a total into N shares that always sum back to it exactly — spreads
+// the odd leftover paisa one cent at a time starting from index 0, rather
+// than dumping it all on one person.
+function equalSplit(total, n) {
+  const totalCents = Math.round(total * 100);
+  const base = Math.floor(totalCents / n);
+  const remainder = totalCents - base * n;
+  return Array.from({ length: n }, (_, i) => (base + (i < remainder ? 1 : 0)) / 100);
 }
 
 // A viewer's own cost for an expense — their split if one exists, otherwise
@@ -271,11 +273,14 @@ export default function Home() {
 
   const [splitEnabled, setSplitEnabled] = useState(false);
   const [splitEmail, setSplitEmail] = useState("");
-  const [splitLookup, setSplitLookup] = useState(null); // "checking" | "not-found" | {uid, username, photoURL}
-  const [splitPayer, setSplitPayer] = useState("me"); // "me" | "them"
-  const [splitMethod, setSplitMethod] = useState("equal"); // "equal" | "custom"
-  const [splitMine, setSplitMine] = useState("");
-  const [splitTheirs, setSplitTheirs] = useState("");
+  const [splitLookup, setSplitLookup] = useState(null); // "checking" | "not-found" | null — transient state for the email field only
+  const [splitPeople, setSplitPeople] = useState([]); // everyone else in the split: [{uid, username, photoURL}]
+  const [splitPayer, setSplitPayer] = useState(null); // uid of whoever paid; null means "you"
+  // Only *manually edited* shares are stored — everyone else's amount is
+  // derived (see splitAmounts) as an equal share of whatever's left. This is
+  // the whole "type one, the rest rebalance" behavior: there's no separate
+  // equal/custom mode, just an increasing set of locked-in numbers.
+  const [splitTouched, setSplitTouched] = useState({}); // { [uid]: "raw input string" }
 
   const [confirmId, setConfirmId] = useState(null);
   const [toast, setToast] = useState("");
@@ -477,6 +482,9 @@ export default function Home() {
     }
   }
 
+  // Resolving an email adds that person straight to the split (same action
+  // as tapping a "recent" chip) rather than just previewing a single match —
+  // the field is for adding someone new to the group, not picking "the" person.
   async function resolveSplitEmail(rawEmail) {
     const email = rawEmail.trim().toLowerCase();
     if (!email) {
@@ -496,24 +504,50 @@ export default function Home() {
       }
       const otherUid = dirSnap.data().uid;
       const profSnap = await getDoc(doc(db, "profiles", otherUid));
-      setSplitLookup({
+      const resolved = {
         uid: otherUid,
         username: profSnap.exists() ? profSnap.data().username : "Unknown",
         photoURL: profSnap.exists() ? profSnap.data().photoURL : null,
-      });
+      };
+      setSplitPeople((list) => (list.some((p) => p.uid === otherUid) ? list : [...list, resolved]));
+      setSplitEmail("");
+      setSplitLookup(null);
     } catch {
       setSplitLookup("not-found");
     }
+  }
+
+  function toggleSplitPerson(p) {
+    setSplitPeople((list) =>
+      list.some((x) => x.uid === p.uid) ? list.filter((x) => x.uid !== p.uid) : [...list, p]
+    );
+    // Drop any manually-entered share for someone who's leaving the split —
+    // otherwise it'd linger and reappear if they're re-added later.
+    setSplitTouched((m) => {
+      if (!(p.uid in m)) return m;
+      const next = { ...m };
+      delete next[p.uid];
+      return next;
+    });
+  }
+
+  // Typing a value locks that person's share; clearing the field unlocks it
+  // back to auto-balancing (see splitAmounts).
+  function setSplitShare(uid, rawValue) {
+    // Always sets, even to "" — once you edit a field it stays touched (and
+    // shows exactly what you type) rather than trying to detect "clear to
+    // unlock", which just snaps an already-untouched field straight back to
+    // its computed value before you can type anything into it.
+    setSplitTouched((m) => ({ ...m, [uid]: rawValue }));
   }
 
   function resetSplitFields() {
     setSplitEnabled(false);
     setSplitEmail("");
     setSplitLookup(null);
-    setSplitPayer("me");
-    setSplitMethod("equal");
-    setSplitMine("");
-    setSplitTheirs("");
+    setSplitPeople([]);
+    setSplitPayer(null);
+    setSplitTouched({});
   }
 
   useEffect(() => {
@@ -521,6 +555,14 @@ export default function Home() {
       setCategory(categories[0].key);
     }
   }, [categories, category]);
+
+  // If whoever's currently marked as payer gets removed from the split,
+  // fall back to "you" rather than leaving a stale/invalid uid selected.
+  useEffect(() => {
+    if (splitPayer && splitPayer !== user?.uid && !splitPeople.some((p) => p.uid === splitPayer)) {
+      setSplitPayer(null);
+    }
+  }, [splitPeople, splitPayer, user]);
 
   const categoryByKey = useMemo(
     () => Object.fromEntries(categories.map((c) => [c.key, c])),
@@ -721,15 +763,22 @@ export default function Home() {
   // Net balance per person: positive = they owe you, negative = you owe
   // them. Always derived from raw expenses/settlements, never stored, so it
   // can't drift out of sync with the records it's summarizing.
+  // Balances are always pairwise, even for a group expense: whoever paid is
+  // owed by every other participant individually, and a non-payer only owes
+  // the payer their own share — there's no 3-way netting, same as Splitwise.
   const balances = useMemo(() => {
     if (!user) return [];
     const net = {};
     expenses.forEach((x) => {
       if (!x.participants || x.participants.length < 2) return;
-      const other = x.participants.find((p) => p !== user.uid);
-      if (!other) return;
-      if (x.payer === user.uid) net[other] = (net[other] || 0) + (x.splits?.[other] || 0);
-      else if (x.payer === other) net[other] = (net[other] || 0) - (x.splits?.[user.uid] || 0);
+      if (x.payer === user.uid) {
+        x.participants.forEach((p) => {
+          if (p === user.uid) return;
+          net[p] = (net[p] || 0) + (x.splits?.[p] || 0);
+        });
+      } else {
+        net[x.payer] = (net[x.payer] || 0) - (x.splits?.[user.uid] || 0);
+      }
     });
     settlements.forEach((s) => {
       const other = s.from === user.uid ? s.to : s.to === user.uid ? s.from : null;
@@ -742,7 +791,7 @@ export default function Home() {
       .sort((a, b) => Math.abs(b.amount) - Math.abs(a.amount));
   }, [expenses, settlements, user]);
 
-  // People you've split an expense with before, most recent first — a
+  // Everyone you've ever split an expense with, most recent first — a
   // one-click alternative to typing their email again. Only the profile
   // cache already built for rendering the ledger/balances is needed here;
   // no new data source.
@@ -753,26 +802,65 @@ export default function Home() {
       .filter((x) => x.participants && x.participants.length > 1)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
       .forEach((x) => {
-        const other = x.participants.find((p) => p !== user.uid);
-        if (other && !seen.has(other)) seen.set(other, peopleProfiles[other]);
+        x.participants.forEach((p) => {
+          if (p !== user.uid && !seen.has(p)) seen.set(p, peopleProfiles[p]);
+        });
       });
     return [...seen.entries()]
       .filter(([, p]) => p)
       .map(([uid, p]) => ({ uid, username: p.username, photoURL: p.photoURL }));
   }, [expenses, peopleProfiles, user]);
 
-  // Live preview of each side's share while filling out the add-expense
-  // form — lets you see the split before submitting instead of after.
-  const splitPreview = useMemo(() => {
-    if (!splitEnabled || !splitLookup || typeof splitLookup !== "object") return null;
+  // Recent chips plus anyone just added by email, deduped — the full set of
+  // people selectable in the split picker.
+  const splitChipPeople = useMemo(() => {
+    const seen = new Map();
+    recentPeople.forEach((p) => seen.set(p.uid, p));
+    splitPeople.forEach((p) => seen.set(p.uid, p));
+    return [...seen.values()];
+  }, [recentPeople, splitPeople]);
+
+  // Every participant's current share. Anyone in splitTouched keeps exactly
+  // what they typed (parsed); everyone else splits whatever's left equally
+  // — so editing one field live-rebalances the untouched ones, and the
+  // whole thing starts as a plain equal split when nobody's touched anything.
+  // Whoever paid absorbs the odd leftover paisa when they're untouched,
+  // otherwise the first untouched person does.
+  const splitAmounts = useMemo(() => {
+    if (!user) return {};
+    const participantUids = [user.uid, ...splitPeople.map((p) => p.uid)];
     const amt = parseFloat(amount) || 0;
-    if (amt <= 0) return null;
-    if (splitMethod === "equal") {
-      const [mine, theirs] = equalSplit(amt);
-      return { mine, theirs };
+    const payerUid = splitPayer || user.uid;
+
+    const result = {};
+    let touchedSum = 0;
+    const untouchedUids = [];
+    participantUids.forEach((uid) => {
+      if (uid in splitTouched) {
+        const v = Math.round((parseFloat(splitTouched[uid]) || 0) * 100) / 100;
+        result[uid] = v;
+        touchedSum += v;
+      } else {
+        untouchedUids.push(uid);
+      }
+    });
+
+    if (untouchedUids.length > 0) {
+      const remaining = Math.max(0, Math.round((amt - touchedSum) * 100) / 100);
+      const ordered = untouchedUids.includes(payerUid)
+        ? [payerUid, ...untouchedUids.filter((uid) => uid !== payerUid)]
+        : untouchedUids;
+      equalSplit(remaining, ordered.length).forEach((share, i) => {
+        result[ordered[i]] = share;
+      });
     }
-    return { mine: parseFloat(splitMine) || 0, theirs: parseFloat(splitTheirs) || 0 };
-  }, [splitEnabled, splitLookup, amount, splitMethod, splitMine, splitTheirs]);
+    return result;
+  }, [splitPeople, splitTouched, amount, splitPayer, user]);
+
+  const splitAmountsSum = useMemo(
+    () => Object.values(splitAmounts).reduce((s, v) => s + v, 0),
+    [splitAmounts]
+  );
 
   function fmtDayLabel(day) {
     const d = new Date(viewMonth.getFullYear(), viewMonth.getMonth(), day);
@@ -789,25 +877,20 @@ export default function Home() {
     let splits = { [user.uid]: amt };
 
     if (splitEnabled) {
-      if (!splitLookup || typeof splitLookup !== "object") {
-        showToast("Find who you're splitting with first.");
+      if (splitPeople.length === 0) {
+        showToast("Add at least one person to split with.");
         return;
       }
-      const otherUid = splitLookup.uid;
-      payer = splitPayer === "me" ? user.uid : otherUid;
-      participants = [user.uid, otherUid];
-      if (splitMethod === "equal") {
-        const [a, b] = equalSplit(amt);
-        splits = { [user.uid]: a, [otherUid]: b };
-      } else {
-        const mine = Math.round(parseFloat(splitMine || "0") * 100) / 100;
-        const theirs = Math.round(parseFloat(splitTheirs || "0") * 100) / 100;
-        if (Math.abs(mine + theirs - amt) > 0.01) {
-          showToast("The two shares need to add up to the total.");
-          return;
-        }
-        splits = { [user.uid]: mine, [otherUid]: theirs };
+      participants = [user.uid, ...splitPeople.map((p) => p.uid)];
+      payer = splitPayer || user.uid;
+      if (Math.abs(splitAmountsSum - amt) > 0.01) {
+        showToast("The shares don't add up to the total yet.");
+        return;
       }
+      splits = participants.reduce((acc, uid) => {
+        acc[uid] = splitAmounts[uid] || 0;
+        return acc;
+      }, {});
     }
 
     const meta = categoryByKey[category];
@@ -1223,20 +1306,19 @@ export default function Home() {
 
               {splitEnabled && (
                 <div className="flex flex-col gap-3 rounded-[calc(var(--radius)-2px)] border border-border bg-secondary/60 p-3">
-                  {recentPeople.length > 0 && (
+                  {splitChipPeople.length > 0 && (
                     <div className="flex flex-col gap-1.5">
-                      <span className="text-xs font-medium text-muted-foreground">Recent</span>
+                      <span className="text-xs font-medium text-muted-foreground">
+                        Split with
+                      </span>
                       <div className="flex flex-wrap items-center gap-2">
-                        {recentPeople.map((p) => (
+                        {splitChipPeople.map((p) => (
                           <button
                             key={p.uid}
                             type="button"
                             className="chip"
-                            data-active={splitLookup?.uid === p.uid}
-                            onClick={() => {
-                              setSplitLookup(p);
-                              setSplitEmail("");
-                            }}
+                            data-active={splitPeople.some((x) => x.uid === p.uid)}
+                            onClick={() => toggleSplitPerson(p)}
                           >
                             {p.photoURL ? (
                               <img
@@ -1256,7 +1338,7 @@ export default function Home() {
                   )}
                   <div>
                     <Label htmlFor="split-email" className="text-xs font-medium text-muted-foreground">
-                      {recentPeople.length > 0 ? "Or someone new — their email" : "Their email"}
+                      {splitChipPeople.length > 0 ? "Add someone new — their email" : "Their email"}
                     </Label>
                     <Input
                       id="split-email"
@@ -1285,110 +1367,68 @@ export default function Home() {
                         Ledger once first.
                       </p>
                     )}
-                    {splitLookup && typeof splitLookup === "object" && (
-                      <p className="mt-1 text-xs" style={{ color: "var(--good)" }}>
-                        Splitting with {splitLookup.username}
-                      </p>
-                    )}
                   </div>
 
-                  {splitLookup && typeof splitLookup === "object" && (
+                  {splitPeople.length > 0 && (
                     <>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-xs font-medium text-muted-foreground">Paid by</span>
-                        <div className="tabs">
+                        <div className="tabs flex-wrap">
                           <button
                             type="button"
                             className="tab-btn"
-                            data-active={splitPayer === "me"}
-                            onClick={() => setSplitPayer("me")}
+                            data-active={!splitPayer || splitPayer === user.uid}
+                            onClick={() => setSplitPayer(null)}
                           >
                             You
                           </button>
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            data-active={splitPayer === "them"}
-                            onClick={() => setSplitPayer("them")}
-                          >
-                            {splitLookup.username}
-                          </button>
+                          {splitPeople.map((p) => (
+                            <button
+                              key={p.uid}
+                              type="button"
+                              className="tab-btn"
+                              data-active={splitPayer === p.uid}
+                              onClick={() => setSplitPayer(p.uid)}
+                            >
+                              {p.username}
+                            </button>
+                          ))}
                         </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-xs font-medium text-muted-foreground">Split</span>
-                        <div className="tabs">
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            data-active={splitMethod === "equal"}
-                            onClick={() => setSplitMethod("equal")}
-                          >
-                            Equal
-                          </button>
-                          <button
-                            type="button"
-                            className="tab-btn"
-                            data-active={splitMethod === "custom"}
-                            onClick={() => setSplitMethod("custom")}
-                          >
-                            Custom
-                          </button>
+                      <div className="flex flex-col gap-1.5">
+                        <span className="text-xs font-medium text-muted-foreground">
+                          Split amounts — starts equal, edit any one to adjust the rest
+                        </span>
+                        <div className="flex flex-col gap-1.5">
+                          {[{ uid: user.uid, username: "You" }, ...splitPeople].map((p) => (
+                            <div key={p.uid} className="flex items-center justify-between gap-2">
+                              <span className="truncate text-sm">{p.username}</span>
+                              <div className="amount-field sm" style={{ width: "130px" }}>
+                                <span className="currency">₹</span>
+                                <input
+                                  type="number"
+                                  inputMode="decimal"
+                                  step="0.01"
+                                  min="0"
+                                  value={
+                                    p.uid in splitTouched
+                                      ? splitTouched[p.uid]
+                                      : (splitAmounts[p.uid] ?? 0).toFixed(2)
+                                  }
+                                  onChange={(e) => setSplitShare(p.uid, e.target.value)}
+                                />
+                              </div>
+                            </div>
+                          ))}
                         </div>
+                        {Math.abs(splitAmountsSum - (parseFloat(amount) || 0)) > 0.01 && (
+                          <p className="text-xs font-medium" style={{ color: "var(--destructive)" }}>
+                            Shares add up to {fmt(splitAmountsSum)}, not{" "}
+                            {fmt(parseFloat(amount) || 0)}.
+                          </p>
+                        )}
                       </div>
-
-                      {splitMethod === "custom" && (
-                        <div className="flex items-center gap-2">
-                          <div className="amount-field sm flex-1">
-                            <span className="currency">₹</span>
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              step="0.01"
-                              min="0"
-                              placeholder="Your share"
-                              value={splitMine}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSplitMine(val);
-                                const amt = parseFloat(amount);
-                                const mine = parseFloat(val);
-                                if (amt > 0 && !isNaN(mine)) {
-                                  setSplitTheirs(String(Math.round((amt - mine) * 100) / 100));
-                                }
-                              }}
-                            />
-                          </div>
-                          <div className="amount-field sm flex-1">
-                            <span className="currency">₹</span>
-                            <input
-                              type="number"
-                              inputMode="decimal"
-                              step="0.01"
-                              min="0"
-                              placeholder="Their share"
-                              value={splitTheirs}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setSplitTheirs(val);
-                                const amt = parseFloat(amount);
-                                const theirs = parseFloat(val);
-                                if (amt > 0 && !isNaN(theirs)) {
-                                  setSplitMine(String(Math.round((amt - theirs) * 100) / 100));
-                                }
-                              }}
-                            />
-                          </div>
-                        </div>
-                      )}
-
-                      {splitPreview && (
-                        <p className="text-xs text-muted-foreground">
-                          You: <strong>{fmt(splitPreview.mine)}</strong> · {splitLookup.username}:{" "}
-                          <strong>{fmt(splitPreview.theirs)}</strong>
-                        </p>
-                      )}
                     </>
                   )}
                 </div>
@@ -1535,9 +1575,19 @@ export default function Home() {
                 {group.items.map((x) => {
                   const color = categoryColor({ colorSlot: x.categoryColorSlot });
                   const shared = x.participants && x.participants.length > 1;
-                  const otherUid = shared ? x.participants.find((p) => p !== user.uid) : null;
-                  const otherName = otherUid && peopleProfiles[otherUid]?.username;
-                  const otherPhoto = otherUid && peopleProfiles[otherUid]?.photoURL;
+                  const otherUids = shared ? x.participants.filter((p) => p !== user.uid) : [];
+                  const otherNames = otherUids
+                    .map((uid) => peopleProfiles[uid]?.username)
+                    .filter(Boolean);
+                  let namesLabel = "…";
+                  if (otherNames.length === 1) namesLabel = otherNames[0];
+                  else if (otherNames.length === 2) namesLabel = `${otherNames[0]}, ${otherNames[1]}`;
+                  else if (otherNames.length > 2)
+                    namesLabel = `${otherNames[0]}, ${otherNames[1]} +${otherNames.length - 2} more`;
+                  const payerName =
+                    x.payer === user.uid ? "you" : peopleProfiles[x.payer]?.username || "they";
+                  const singleOtherPhoto =
+                    otherUids.length === 1 ? peopleProfiles[otherUids[0]]?.photoURL : null;
                   return (
                     <div className="expense-row" data-shared={shared} key={x.id}>
                       <span className="dot" style={{ background: color }} />
@@ -1552,12 +1602,12 @@ export default function Home() {
                         )}
                         {shared && (
                           <div className="split-badge">
-                            {otherPhoto ? (
-                              <img src={otherPhoto} alt="" referrerPolicy="no-referrer" />
+                            {singleOtherPhoto ? (
+                              <img src={singleOtherPhoto} alt="" referrerPolicy="no-referrer" />
                             ) : (
                               <Users />
                             )}
-                            {otherName || "…"} · {x.payer === user.uid ? "you paid" : "they paid"}
+                            {namesLabel} · {payerName === "you" ? "you paid" : `${payerName} paid`}
                           </div>
                         )}
                       </span>
