@@ -4,7 +4,7 @@ import { db } from "@/lib/firebase";
 import { Users } from "lucide-react";
 import { categoryColor, formatDateHeading, fmt, myShare } from "@/lib/expense-utils";
 
-export function ExpenseList({ loading, groupedList, viewMonth, user, peopleProfiles, onError }) {
+export function ExpenseList({ loading, groupedList, emptyMessage, user, peopleProfiles, onError }) {
   const [confirmId, setConfirmId] = useState(null);
 
   async function handleDelete(id) {
@@ -26,12 +26,7 @@ export function ExpenseList({ loading, groupedList, viewMonth, user, peopleProfi
   }
 
   if (groupedList.length === 0) {
-    return (
-      <p className="py-8 text-center text-sm text-muted-foreground">
-        No expenses logged in{" "}
-        {viewMonth.toLocaleDateString("en-IN", { month: "long" })} yet.
-      </p>
-    );
+    return <p className="py-8 text-center text-sm text-muted-foreground">{emptyMessage}</p>;
   }
 
   return (

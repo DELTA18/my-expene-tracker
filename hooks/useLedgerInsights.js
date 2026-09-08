@@ -63,12 +63,22 @@ export function useLedgerInsights(expenses, settlements, user, viewMonth, viewDa
   }, [currentMonthExpenses, viewMonth, user]);
   const maxDaily = Math.max(1, ...dailySeries.map((d) => d.amount));
 
-  const dayTotal = useMemo(() => {
+  const dayExpenses = useMemo(() => {
     const key = dateKey(viewDay);
     return expenses
       .filter((x) => x.date === key)
-      .reduce((s, x) => s + myShare(x, user?.uid), 0);
-  }, [expenses, viewDay, user]);
+      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [expenses, viewDay]);
+  const dayTotal = useMemo(
+    () => dayExpenses.reduce((s, x) => s + myShare(x, user?.uid), 0),
+    [dayExpenses, user]
+  );
+  // Same {date, items} shape as groupedList, just always a single group —
+  // lets ExpenseList render either one with no changes of its own.
+  const dayGroupedList = useMemo(
+    () => (dayExpenses.length ? [{ date: dateKey(viewDay), items: dayExpenses }] : []),
+    [dayExpenses, viewDay]
+  );
 
   const sixMonthSeries = useMemo(() => {
     const months = [];
@@ -150,6 +160,7 @@ export function useLedgerInsights(expenses, settlements, user, viewMonth, viewDa
     dailySeries,
     maxDaily,
     dayTotal,
+    dayGroupedList,
     sixMonthSeries,
     maxSixMonth,
     balances,

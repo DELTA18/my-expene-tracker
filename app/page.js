@@ -61,6 +61,7 @@ export default function Home() {
     dailySeries,
     maxDaily,
     dayTotal,
+    dayGroupedList,
     sixMonthSeries,
     maxSixMonth,
     balances,
@@ -74,6 +75,12 @@ export default function Home() {
   function shiftViewDay(delta) {
     setViewDay((d) => shiftDay(d, delta));
   }
+
+  const isDaily = summaryView === "daily";
+  const ledgerGroupedList = isDaily ? dayGroupedList : groupedList;
+  const ledgerEmptyMessage = isDaily
+    ? `No expenses logged on ${viewDay.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })} yet.`
+    : `No expenses logged in ${viewMonth.toLocaleDateString("en-IN", { month: "long" })} yet.`;
 
   if (!firebaseReady) return <ConnectDatabaseScreen />;
   if (authLoading) return <LoadingScreen />;
@@ -117,8 +124,8 @@ export default function Home() {
           />
           <ExpenseList
             loading={loading}
-            groupedList={groupedList}
-            viewMonth={viewMonth}
+            groupedList={ledgerGroupedList}
+            emptyMessage={ledgerEmptyMessage}
             user={user}
             peopleProfiles={peopleProfiles}
             onError={showToast}
