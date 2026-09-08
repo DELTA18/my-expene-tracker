@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { firebaseReady } from "@/lib/firebase";
-import { shiftMonth } from "@/lib/expense-utils";
+import { shiftDay, shiftMonth } from "@/lib/expense-utils";
 
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useProfile } from "@/hooks/useProfile";
@@ -10,6 +10,7 @@ import { useExpensesData } from "@/hooks/useExpensesData";
 import { usePeopleProfiles } from "@/hooks/usePeopleProfiles";
 import { useCategories } from "@/hooks/useCategories";
 import { useBudget } from "@/hooks/useBudget";
+import { usePreferences } from "@/hooks/usePreferences";
 import { useLedgerInsights } from "@/hooks/useLedgerInsights";
 
 import { ConnectDatabaseScreen } from "@/components/connect-database-screen";
@@ -42,11 +43,13 @@ export default function Home() {
     showToast
   );
   const { budget, saveBudget } = useBudget(user, showToast);
+  const { summaryView, setSummaryView, dailyBudget, saveDailyBudget } = usePreferences(user, showToast);
 
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
     return new Date(d.getFullYear(), d.getMonth(), 1);
   });
+  const [viewDay, setViewDay] = useState(() => new Date());
   const [view, setView] = useState("ledger");
 
   const {
@@ -57,14 +60,19 @@ export default function Home() {
     groupedList,
     dailySeries,
     maxDaily,
+    dayTotal,
     sixMonthSeries,
     maxSixMonth,
     balances,
     recentPeople,
-  } = useLedgerInsights(expenses, settlements, user, viewMonth, peopleProfiles);
+  } = useLedgerInsights(expenses, settlements, user, viewMonth, viewDay, peopleProfiles);
 
   function shiftViewMonth(delta) {
     setViewMonth((m) => shiftMonth(m, delta));
+  }
+
+  function shiftViewDay(delta) {
+    setViewDay((d) => shiftDay(d, delta));
   }
 
   if (!firebaseReady) return <ConnectDatabaseScreen />;
@@ -93,10 +101,19 @@ export default function Home() {
           <MonthSummaryCard
             viewMonth={viewMonth}
             onShiftMonth={shiftViewMonth}
+            onSetMonth={setViewMonth}
+            viewDay={viewDay}
+            onShiftDay={shiftViewDay}
+            onSetDay={setViewDay}
             total={total}
             deltaPct={deltaPct}
             budget={budget}
             saveBudget={saveBudget}
+            summaryView={summaryView}
+            onChangeSummaryView={setSummaryView}
+            dayTotal={dayTotal}
+            dailyBudget={dailyBudget}
+            saveDailyBudget={saveDailyBudget}
           />
           <ExpenseList
             loading={loading}
