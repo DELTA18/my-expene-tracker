@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { doc, onSnapshot, setDoc } from "firebase/firestore";
 import { db, firebaseReady } from "@/lib/firebase";
+import { applyTheme } from "@/lib/theme";
 
 export function usePreferences(user, onError) {
   const [summaryView, setSummaryViewState] = useState("monthly");
   const [dailyBudget, setDailyBudget] = useState(null);
+  const [theme, setThemeState] = useState("system");
 
   useEffect(() => {
     if (!firebaseReady || !db || !user) return;
@@ -12,6 +14,12 @@ export function usePreferences(user, onError) {
       const data = snap.data();
       setSummaryViewState(data?.summaryView === "daily" ? "daily" : "monthly");
       setDailyBudget(typeof data?.dailyBudget === "number" ? data.dailyBudget : null);
+      const resolvedTheme = data?.theme === "light" || data?.theme === "dark" ? data.theme : "system";
+      setThemeState(resolvedTheme);
+      // Corrects whatever the pre-auth inline script guessed from
+      // localStorage (nothing, on a device that's never seen this account)
+      // now that the real stored preference is in.
+      applyTheme(resolvedTheme);
     });
     return unsub;
   }, [user]);
@@ -51,5 +59,17 @@ export function usePreferences(user, onError) {
     }
   }
 
-  return { summaryView, setSummaryView, dailyBudget, saveDailyBudget };
+  // Applied immediately (before the write resolves) so there's no lag
+  // between tapping the toggle and the page actually changing color.
+  async function setTheme(next) {
+    setThemeState(next);
+    applyTheme(next);
+    try {
+      await setDoc(doc(db, "users", user.uid, "meta", "preferences"), { theme: next }, { merge: true });
+    } catch {
+      onError?.("Couldn't save your theme preference.");
+    }
+  }
+
+  return { summaryView, setSummaryView, dailyBudget, saveDailyBudget, theme, setTheme };
 }

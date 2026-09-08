@@ -43,7 +43,10 @@ export default function Home() {
     showToast
   );
   const { budget, saveBudget } = useBudget(user, showToast);
-  const { summaryView, setSummaryView, dailyBudget, saveDailyBudget } = usePreferences(user, showToast);
+  const { summaryView, setSummaryView, dailyBudget, saveDailyBudget, theme, setTheme } = usePreferences(
+    user,
+    showToast
+  );
 
   const [viewMonth, setViewMonth] = useState(() => {
     const d = new Date();
@@ -90,7 +93,7 @@ export default function Home() {
 
   return (
     <div className="mx-auto flex w-full max-w-[560px] flex-col gap-4 px-4 pb-20 pt-7 sm:px-5">
-      <AppHeader profile={profile} onSignOut={handleSignOut} />
+      <AppHeader profile={profile} onSignOut={handleSignOut} theme={theme} onCycleTheme={setTheme} />
 
       <ViewTabs view={view} onChange={setView} hasBalances={balances.length > 0} />
 

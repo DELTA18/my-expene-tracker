@@ -1,6 +1,12 @@
+import { Monitor, Moon, Sun } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-export function AppHeader({ profile, onSignOut }) {
+const THEME_CYCLE = { system: "light", light: "dark", dark: "system" };
+const THEME_ICON = { system: Monitor, light: Sun, dark: Moon };
+
+export function AppHeader({ profile, onSignOut, theme, onCycleTheme }) {
+  const ThemeIcon = THEME_ICON[theme] ?? Monitor;
+
   return (
     <header className="flex items-center justify-between gap-3 px-0.5">
       <div>
@@ -24,6 +30,15 @@ export function AppHeader({ profile, onSignOut }) {
             {profile.username.slice(0, 1).toUpperCase()}
           </span>
         )}
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          aria-label={`Theme: ${theme}. Click to change.`}
+          onClick={() => onCycleTheme(THEME_CYCLE[theme] ?? "light")}
+        >
+          <ThemeIcon />
+        </Button>
         <Button type="button" variant="ghost" size="sm" onClick={onSignOut}>
           Sign out
         </Button>

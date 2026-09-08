@@ -44,6 +44,17 @@ export default function RootLayout({ children }) {
       className={`${fontSans.variable} ${fontMono.variable} ${fontDisplay.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        <script
+          // Runs before paint so a stored light/dark override applies
+          // immediately, instead of flashing system-default theme first
+          // while Firebase auth/Firestore are still resolving the real
+          // preference. Mirrors lib/theme.js's applyTheme, kept inline since
+          // it can't import a module.
+          dangerouslySetInnerHTML={{
+            __html:
+              '(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark"){document.documentElement.classList.add(t);}}catch(e){}})();',
+          }}
+        />
         {children}
         <RegisterServiceWorker />
       </body>
