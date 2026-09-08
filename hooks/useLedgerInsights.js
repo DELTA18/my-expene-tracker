@@ -1,7 +1,7 @@
 import { useMemo } from "react";
-import { daysInMonth, monthKey, myShare, shiftMonth } from "@/lib/expense-utils";
+import { dateKey, daysInMonth, monthKey, myShare, shiftMonth } from "@/lib/expense-utils";
 
-export function useLedgerInsights(expenses, settlements, user, viewMonth, peopleProfiles) {
+export function useLedgerInsights(expenses, settlements, user, viewMonth, viewDay, peopleProfiles) {
   const currentMonthExpenses = useMemo(
     () => expenses.filter((x) => x.date && x.date.slice(0, 7) === monthKey(viewMonth)),
     [expenses, viewMonth]
@@ -62,6 +62,13 @@ export function useLedgerInsights(expenses, settlements, user, viewMonth, people
     return Array.from({ length: nDays }, (_, i) => ({ day: i + 1, amount: totals[i + 1] }));
   }, [currentMonthExpenses, viewMonth, user]);
   const maxDaily = Math.max(1, ...dailySeries.map((d) => d.amount));
+
+  const dayTotal = useMemo(() => {
+    const key = dateKey(viewDay);
+    return expenses
+      .filter((x) => x.date === key)
+      .reduce((s, x) => s + myShare(x, user?.uid), 0);
+  }, [expenses, viewDay, user]);
 
   const sixMonthSeries = useMemo(() => {
     const months = [];
@@ -142,6 +149,7 @@ export function useLedgerInsights(expenses, settlements, user, viewMonth, people
     groupedList,
     dailySeries,
     maxDaily,
+    dayTotal,
     sixMonthSeries,
     maxSixMonth,
     balances,
