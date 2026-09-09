@@ -21,7 +21,7 @@ export function useExpenseForm({ user, categories, categoryByKey, recentPeople, 
   async function handleSubmit(e) {
     e.preventDefault();
     const amt = Math.round(parseFloat(amount) * 100) / 100;
-    if (!amt || amt <= 0 || !db || !user) return;
+    if (!amt || amt <= 0 || !db || !user) return false;
 
     let participants = [user.uid];
     let payer = user.uid;
@@ -30,13 +30,13 @@ export function useExpenseForm({ user, categories, categoryByKey, recentPeople, 
     if (split.splitEnabled) {
       if (split.splitPeople.length === 0) {
         onError?.("Add at least one person to split with.");
-        return;
+        return false;
       }
       participants = [user.uid, ...split.splitPeople.map((p) => p.uid)];
       payer = split.splitPayer || user.uid;
       if (Math.abs(split.splitAmountsSum - amt) > 0.01) {
         onError?.("The shares don't add up to the total yet.");
-        return;
+        return false;
       }
       splits = participants.reduce((acc, uid) => {
         acc[uid] = split.splitAmounts[uid] || 0;
@@ -64,8 +64,10 @@ export function useExpenseForm({ user, categories, categoryByKey, recentPeople, 
       setDate(todayStr());
       setCategory(categories[0]?.key || "");
       split.resetSplitFields();
+      return true;
     } catch {
       onError?.("Couldn't save that expense. Please try again.");
+      return false;
     }
   }
 
