@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { firebaseReady } from "@/lib/firebase";
 import { shiftDay, shiftMonth } from "@/lib/expense-utils";
 
@@ -28,10 +28,16 @@ import { Toast } from "@/components/toast";
 
 export default function Home() {
   const [toast, setToast] = useState("");
-  function showToast(msg) {
+  // Stable reference — several hooks (useExpensesData in particular, which
+  // holds the live listener on the whole /expenses collection) take this as
+  // an effect dependency. A new function identity every render was tearing
+  // that listener down and resubscribing on every render, and resubscribing
+  // re-reads the full result set — a silent infinite loop that ran up
+  // hundreds of thousands of reads.
+  const showToast = useCallback((msg) => {
     setToast(msg);
     setTimeout(() => setToast(""), 3200);
-  }
+  }, []);
 
   const { user, authLoading, authError, handleSignIn, handleSignOut } = useAuthUser(showToast);
   const { profile, profileLoading, saveProfile } = useProfile(user, showToast);
