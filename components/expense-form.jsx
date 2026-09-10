@@ -66,15 +66,10 @@ export function ExpenseForm({ user, categories, categoryByKey, categoryRows, rec
   }, []);
 
   async function handleSubmit(e) {
-    // TEMP: animation-only testing, skips the real Firestore write. Remove
-    // this block (and restore the `form.handleSubmit(e)` call below it) once
-    // you're done previewing the coin-burst.
-    e.preventDefault();
-    const ok = true;
-    // const ok = await form.handleSubmit(e);
+    const amt = parseFloat(form.amount) || 0;
+    const color = categoryColor(categoryByKey[form.category]);
+    const ok = await form.handleSubmit(e);
     if (ok) {
-      const amt = parseFloat(form.amount) || 0;
-      const color = categoryColor(categoryByKey[form.category]);
       setJustSaved(true);
       setBurst({ key: Date.now(), color, particles: makeCoinBurst({ amt, color }) });
       if (typeof navigator !== "undefined" && navigator.vibrate) navigator.vibrate(10);
