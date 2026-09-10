@@ -712,6 +712,7 @@
   pointer-events: none;
   overflow: visible;
   z-index: 5;
+  perspective: 260px;
 }
 .coin-particle {
   position: absolute;
@@ -726,20 +727,47 @@
   opacity: 0;
   animation: coin-burst 0.75s var(--delay, 0ms) cubic-bezier(0.2, 0.65, 0.4, 1) forwards;
 }
+/* rotateY instead of a flat z-rotate so each particle foreshortens as it
+   spins, reading as a tumbling coin rather than a flat confetti chip. */
 @keyframes coin-burst {
   0% {
-    transform: translate(0, 0) scale(0.4) rotate(0deg);
+    transform: translate(0, 0) scale(0.4) rotateY(0deg);
     opacity: 1;
   }
   35% {
-    transform: translate(var(--tx), var(--ty-peak)) scale(1) rotate(calc(var(--rot) * 0.5));
+    transform: translate(var(--tx), var(--ty-peak)) scale(1) rotateY(calc(var(--rot) * 0.55));
     opacity: 1;
   }
   80% {
     opacity: 1;
   }
   100% {
-    transform: translate(var(--tx), var(--ty-end)) scale(0.6) rotate(var(--rot));
+    transform: translate(var(--tx), var(--ty-end)) scale(0.6) rotateY(var(--rot));
+    opacity: 0;
+  }
+}
+
+/* One crisp ring at the launch point so the burst reads as an impact
+   pushing particles outward, not particles just appearing mid-air. */
+.coin-shock {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  margin: -3px 0 0 -3px;
+  border-radius: 50%;
+  border: 1.5px solid var(--shock-color, var(--good));
+  opacity: 0.9;
+  animation: coin-shock 0.4s ease-out forwards;
+}
+@keyframes coin-shock {
+  0% {
+    transform: scale(1);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(8);
     opacity: 0;
   }
 }
@@ -754,7 +782,8 @@
   .submit-btn[data-saved="true"] .check-icon {
     animation: none;
   }
-  .coin-particle {
+  .coin-particle,
+  .coin-shock {
     display: none;
   }
 }
