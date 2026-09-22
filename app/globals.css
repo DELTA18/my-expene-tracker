@@ -251,6 +251,30 @@
   background: #fff !important;
 }
 
+/* Same shape as .chip, but for a control that reflects a state (a filter)
+   rather than triggering an action — a tinted pill reads as "on" without
+   competing with solid-primary CTAs like the submit button. */
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--border);
+  background: var(--secondary);
+  color: var(--muted-foreground);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 0.82rem;
+  cursor: pointer;
+  font-family: var(--font-sans);
+  white-space: nowrap;
+}
+.filter-chip[data-active="true"] {
+  background: color-mix(in srgb, var(--primary) 14%, transparent);
+  border-color: color-mix(in srgb, var(--primary) 32%, transparent);
+  color: var(--primary);
+  font-weight: 500;
+}
+
 .amount-field {
   display: flex;
   align-items: center;
