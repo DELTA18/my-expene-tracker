@@ -6,6 +6,7 @@ import { ChevronDown, Pencil, TriangleAlert } from "lucide-react";
 import { dateKey, fmt, todayStr } from "@/lib/expense-utils";
 import { useCountUp } from "@/hooks/useCountUp";
 import { PeriodNav } from "@/components/period-nav";
+import { SegmentedTabs } from "@/components/segmented-tabs";
 import { MonthPicker } from "@/components/month-picker";
 import { DayPicker } from "@/components/day-picker";
 
@@ -112,30 +113,19 @@ export function MonthSummaryCard({
               {deltaPct > 0 ? "▲" : "▼"} {Math.abs(deltaPct)}% vs last month
             </span>
           )}
-          <div className="tabs tabs-sm ml-auto">
-            <button
-              type="button"
-              className="tab-btn"
-              data-active={!isDaily}
-              onClick={() => {
-                setEditingBudget(false);
-                onChangeSummaryView("monthly");
-              }}
-            >
-              Monthly
-            </button>
-            <button
-              type="button"
-              className="tab-btn"
-              data-active={isDaily}
-              onClick={() => {
-                setEditingBudget(false);
-                onChangeSummaryView("daily");
-              }}
-            >
-              Daily
-            </button>
-          </div>
+          <SegmentedTabs
+            className="ml-auto"
+            size="sm"
+            value={isDaily ? "daily" : "monthly"}
+            onChange={(v) => {
+              setEditingBudget(false);
+              onChangeSummaryView(v);
+            }}
+            items={[
+              { value: "monthly", label: "Monthly" },
+              { value: "daily", label: "Daily" },
+            ]}
+          />
         </div>
 
         <div className="mt-4 border-t border-border pt-4">
