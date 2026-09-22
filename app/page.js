@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { firebaseReady } from "@/lib/firebase";
 import { shiftDay, shiftMonth } from "@/lib/expense-utils";
 
@@ -21,6 +21,7 @@ import { AppHeader } from "@/components/app-header";
 import { ViewTabs } from "@/components/view-tabs";
 import { ExpenseForm } from "@/components/expense-form";
 import { MonthSummaryCard } from "@/components/month-summary-card";
+import { ExpenseFilters } from "@/components/expense-filters";
 import { ExpenseList } from "@/components/expense-list";
 import { InsightsPanel } from "@/components/insights-panel";
 import { BalancesPanel } from "@/components/balances-panel";
@@ -60,6 +61,8 @@ export default function Home() {
   });
   const [viewDay, setViewDay] = useState(() => new Date());
   const [view, setView] = useState("ledger");
+  const [filterCategories, setFilterCategories] = useState([]);
+  const [filterUsers, setFilterUsers] = useState([]);
 
   const {
     total,
@@ -87,9 +90,52 @@ export default function Home() {
 
   const isDaily = summaryView === "daily";
   const ledgerGroupedList = isDaily ? dayGroupedList : groupedList;
-  const ledgerEmptyMessage = isDaily
-    ? `No expenses logged on ${viewDay.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })} yet.`
-    : `No expenses logged in ${viewMonth.toLocaleDateString("en-IN", { month: "long" })} yet.`;
+
+  // "Just me" first (expenses with nobody else on them), then everyone
+  // recentPeople already knows about — reusing that list keeps this to
+  // people you've actually split something with, not every uid ever seen.
+  const userFilterOptions = useMemo(
+    () => [
+      { uid: "me", label: "Just me" },
+      ...recentPeople.map((p) => ({ uid: p.uid, label: p.username, photoURL: p.photoURL })),
+    ],
+    [recentPeople]
+  );
+
+  // Filtering only trims what's already grouped/sorted for the period, so
+  // it can't disagree with the totals or ordering shown above the list —
+  // empty groups left behind by a filter are dropped rather than rendered
+  // as a blank date heading.
+  const filteredGroupedList = useMemo(() => {
+    if (filterCategories.length === 0 && filterUsers.length === 0) return ledgerGroupedList;
+    return ledgerGroupedList
+      .map((group) => ({
+        date: group.date,
+        items: group.items.filter((x) => {
+          if (filterCategories.length > 0) {
+            const label = x.categoryLabel || "Uncategorized";
+            if (!filterCategories.includes(label)) return false;
+          }
+          if (filterUsers.length > 0) {
+            const isJustMe = !x.participants || x.participants.length <= 1;
+            const matchesSomeone = filterUsers.some((u) =>
+              u === "me" ? isJustMe : (x.participants || []).includes(u)
+            );
+            if (!matchesSomeone) return false;
+          }
+          return true;
+        }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [ledgerGroupedList, filterCategories, filterUsers]);
+
+  const hasActiveFilters = filterCategories.length > 0 || filterUsers.length > 0;
+  const ledgerEmptyMessage =
+    hasActiveFilters && ledgerGroupedList.length > 0
+      ? "No expenses match these filters."
+      : isDaily
+        ? `No expenses logged on ${viewDay.toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })} yet.`
+        : `No expenses logged in ${viewMonth.toLocaleDateString("en-IN", { month: "long" })} yet.`;
 
   if (!firebaseReady) return <ConnectDatabaseScreen />;
   if (authLoading) return <LoadingScreen />;
@@ -131,9 +177,19 @@ export default function Home() {
             dailyBudget={dailyBudget}
             saveDailyBudget={saveDailyBudget}
           />
+          {ledgerGroupedList.length > 0 && (
+            <ExpenseFilters
+              categories={categories}
+              filterCategories={filterCategories}
+              onChangeCategories={setFilterCategories}
+              userOptions={userFilterOptions}
+              filterUsers={filterUsers}
+              onChangeUsers={setFilterUsers}
+            />
+          )}
           <ExpenseList
             loading={loading}
-            groupedList={ledgerGroupedList}
+            groupedList={filteredGroupedList}
             emptyMessage={ledgerEmptyMessage}
             user={user}
             peopleProfiles={peopleProfiles}
