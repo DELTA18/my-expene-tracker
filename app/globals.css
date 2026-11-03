@@ -616,6 +616,47 @@
 .viz-bar-hit:focus-visible .viz-bar-fill {
   opacity: 0.72;
 }
+/* An outlier bar drawn shorter than its true value: a slanted gap near the
+   top marks the cut, like a broken axis. */
+.viz-bar-fill[data-clipped] {
+  position: relative;
+}
+.viz-bar-fill[data-clipped]::after {
+  content: "";
+  position: absolute;
+  left: -2px;
+  right: -2px;
+  top: 10px;
+  height: 3px;
+  background: var(--card);
+  transform: skewY(-24deg);
+}
+.viz-bar-label {
+  position: absolute;
+  top: calc(-15px - var(--label-row, 0) * 14px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  line-height: 1;
+  font-weight: 600;
+  color: var(--foreground);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.viz-bar-col:first-child .viz-bar-label {
+  left: 0;
+  transform: none;
+}
+.viz-bar-col:last-child .viz-bar-label {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+.viz-bar-hit:hover .viz-bar-label,
+.viz-bar-hit:focus-visible .viz-bar-label {
+  opacity: 0;
+}
 .viz-bar-tick {
   font-size: 0.62rem;
   color: var(--muted-foreground);
@@ -828,9 +869,66 @@
   }
 }
 
+/* The typed amount in flight from the form to the summary total. The two
+   nested tracks carry the x and y motion separately (see launchFlight). */
+.fly-ghost {
+  position: fixed;
+  width: 0;
+  height: 0;
+  z-index: 60;
+  pointer-events: none;
+}
+.fly-track {
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+}
+.fly-amount {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform: translate(-50%, -50%);
+  font-family: var(--font-mono);
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-shadow: 0 2px 10px color-mix(in srgb, currentColor 35%, transparent);
+}
+
+/* Impact on the summary total when the amount lands: a squash-and-stretch
+   bump plus a quick green flash before settling back to normal text. */
+.total-figure {
+  display: inline-block;
+  transform-origin: left bottom;
+}
+.total-figure[data-landed] {
+  animation: total-land 0.55s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes total-land {
+  0% {
+    transform: scale(1, 1);
+    color: var(--good);
+  }
+  25% {
+    transform: scale(1.1, 0.88);
+    color: var(--good);
+  }
+  55% {
+    transform: scale(0.97, 1.05);
+  }
+  100% {
+    transform: scale(1, 1);
+    color: var(--foreground);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .meter-fill {
     transition: none;
+  }
+  .total-figure[data-landed] {
+    animation: none;
   }
   .submit-btn[data-saved="true"] {
     animation: none;

@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChevronDown, Pencil, TriangleAlert } from "lucide-react";
-import { dateKey, fmt, todayStr } from "@/lib/expense-utils";
+import { dateKey, fmt, monthKey, todayStr } from "@/lib/expense-utils";
 import { useCountUp } from "@/hooks/useCountUp";
 import { PeriodNav } from "@/components/period-nav";
 import { SegmentedTabs } from "@/components/segmented-tabs";
@@ -24,6 +24,7 @@ export function MonthSummaryCard({
   summaryView,
   onChangeSummaryView,
   dayTotal,
+  filteredTotal,
   dailyBudget,
   saveDailyBudget,
 }) {
@@ -32,12 +33,58 @@ export function MonthSummaryCard({
   const activeBudget = isDaily ? dailyBudget : budget;
   const saveActiveBudget = isDaily ? saveDailyBudget : saveBudget;
 
-  const animatedTotal = useCountUp(activeTotal);
+  const isFiltered = filteredTotal !== null && filteredTotal !== undefined;
+  const headlineTotal = isFiltered ? filteredTotal : activeTotal;
+
+  // While an amount is flying in from the form (see ExpenseForm), the shown
+  // totals are held at their pre-add values and released on impact.
+  const totalRef = useRef(null);
+  const liveRef = useRef({ headline: 0, total: 0 });
+  const releaseTimer = useRef(null);
+  const [held, setHeld] = useState(null);
+  const [landKey, setLandKey] = useState(0);
+
+  useEffect(() => {
+    liveRef.current = { headline: headlineTotal, total: activeTotal };
+  });
+
+  useEffect(() => {
+    function onPrepare(e) {
+      const { date } = e.detail;
+      const inPeriod = isDaily ? date === dateKey(viewDay) : date?.slice(0, 7) === monthKey(viewMonth);
+      const el = totalRef.current;
+      if (!inPeriod || isFiltered || !el) return;
+      const r = el.getBoundingClientRect();
+      if (r.top < 0 || r.bottom > window.innerHeight) return;
+
+      function release(landed) {
+        clearTimeout(releaseTimer.current);
+        setHeld(null);
+        if (landed) setLandKey((k) => k + 1);
+      }
+      setHeld(liveRef.current);
+      clearTimeout(releaseTimer.current);
+      releaseTimer.current = setTimeout(() => release(false), 2500);
+      e.detail.target = el;
+      e.detail.release = release;
+    }
+    window.addEventListener("expense-fly-prepare", onPrepare);
+    return () => {
+      window.removeEventListener("expense-fly-prepare", onPrepare);
+      clearTimeout(releaseTimer.current);
+    };
+  }, [isDaily, viewDay, viewMonth, isFiltered]);
+
+  // The headline follows the filters; the budget meter always tracks the
+  // real total so it never looks healthier than it is.
+  const meterTotal = held ? held.total : activeTotal;
+  const animatedTotal = useCountUp(meterTotal);
+  const animatedHeadline = useCountUp(held ? held.headline : headlineTotal);
   const [editingBudget, setEditingBudget] = useState(false);
   const [budgetDraft, setBudgetDraft] = useState("");
   const [pickerOpen, setPickerOpen] = useState(false);
 
-  const budgetPct = activeBudget ? Math.round((activeTotal / activeBudget) * 100) : null;
+  const budgetPct = activeBudget ? Math.round((meterTotal / activeBudget) * 100) : null;
   const budgetState = budgetPct === null ? null : budgetPct >= 100 ? "over" : budgetPct >= 80 ? "warning" : "good";
   const budgetFillColor =
     budgetState === "over" ? "var(--destructive)" : budgetState === "warning" ? "var(--warning)" : "var(--good)";
@@ -105,10 +152,15 @@ export function MonthSummaryCard({
         )}
 
         <div className="flex flex-wrap items-baseline gap-2.5">
-          <span className="font-mono text-[2.05rem] font-semibold tabular-nums leading-none">
-            {fmt(animatedTotal)}
+          <span
+            ref={totalRef}
+            key={landKey}
+            data-landed={landKey > 0 || undefined}
+            className="total-figure font-mono text-[2.05rem] font-semibold tabular-nums leading-none"
+          >
+            {fmt(animatedHeadline)}
           </span>
-          {!isDaily && deltaPct !== null && deltaPct !== 0 && (
+          {!isDaily && !isFiltered && deltaPct !== null && deltaPct !== 0 && (
             <span className={`delta-pill ${deltaPct > 0 ? "bad" : "good"}`}>
               {deltaPct > 0 ? "▲" : "▼"} {Math.abs(deltaPct)}% vs last month
             </span>
@@ -127,6 +179,11 @@ export function MonthSummaryCard({
             ]}
           />
         </div>
+        {isFiltered && (
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Filtered · of {fmt(activeTotal)} total
+          </p>
+        )}
 
         <div className="mt-4 border-t border-border pt-4">
           {editingBudget ? (
@@ -174,7 +231,7 @@ export function MonthSummaryCard({
               <div className="meter-sub" data-state={budgetState}>
                 {budgetState !== "good" && <TriangleAlert className="status-icon" />}
                 <strong>{fmt(animatedTotal)}</strong> of {fmt(activeBudget)} · {budgetPct}%
-                {budgetState === "over" && ` — ${fmt(activeTotal - activeBudget)} over`}
+                {budgetState === "over" && ` — ${fmt(meterTotal - activeBudget)} over`}
               </div>
             </>
           ) : (

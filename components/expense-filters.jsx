@@ -66,10 +66,15 @@ export function ExpenseFilters({
   userOptions,
   filterUsers,
   onChangeUsers,
+  payerOptions,
+  filterPayers,
+  onChangePayers,
 }) {
   const userLabelByUid = Object.fromEntries(userOptions.map((p) => [p.uid, p.label]));
   const selectedUserLabels = filterUsers.map((uid) => userLabelByUid[uid]).filter(Boolean);
-  const hasFilters = filterCategories.length > 0 || filterUsers.length > 0;
+  const payerLabelByUid = Object.fromEntries(payerOptions.map((p) => [p.uid, p.label]));
+  const selectedPayerLabels = filterPayers.map((uid) => payerLabelByUid[uid]).filter(Boolean);
+  const hasFilters = filterCategories.length > 0 || filterUsers.length > 0 || filterPayers.length > 0;
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -118,6 +123,30 @@ export function ExpenseFilters({
         ))}
       </FilterMenu>
 
+      <FilterMenu
+        triggerLabel={
+          selectedPayerLabels.length > 0 ? `Paid by ${summarize(selectedPayerLabels)}` : "Paid by"
+        }
+        active={filterPayers.length > 0}
+      >
+        <button
+          type="button"
+          onClick={() => onChangePayers([])}
+          className="mb-1 flex w-full items-center rounded-lg border-b border-border px-2.5 pb-2 pt-1 text-left text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          Anyone
+        </button>
+        {payerOptions.map((p) => (
+          <FilterCheckbox
+            key={p.uid}
+            checked={filterPayers.includes(p.uid)}
+            label={p.label}
+            photoURL={p.photoURL}
+            onClick={() => onChangePayers(toggle(filterPayers, p.uid))}
+          />
+        ))}
+      </FilterMenu>
+
       {hasFilters && (
         <button
           type="button"
@@ -125,6 +154,7 @@ export function ExpenseFilters({
           onClick={() => {
             onChangeCategories([]);
             onChangeUsers([]);
+            onChangePayers([]);
           }}
           className="flex shrink-0 items-center gap-1 rounded-full px-2 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted"
         >
