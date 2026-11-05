@@ -1,6 +1,10 @@
+import { BehaviourCard } from "@/components/behaviour-card";
 import { CategoryBreakdown } from "@/components/category-breakdown";
 import { DailySpendChart } from "@/components/daily-spend-chart";
 import { SixMonthChart } from "@/components/six-month-chart";
+
+// Hidden until the patterns are worth showing.
+const SHOW_PATTERNS = false;
 
 export function InsightsPanel({
   viewMonth,
@@ -12,9 +16,11 @@ export function InsightsPanel({
   maxDaily,
   sixMonthSeries,
   maxSixMonth,
+  behaviour,
 }) {
   return (
     <>
+      {SHOW_PATTERNS && <BehaviourCard insights={behaviour} />}
       <CategoryBreakdown
         viewMonth={viewMonth}
         onShiftMonth={onShiftMonth}

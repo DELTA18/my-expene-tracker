@@ -2,7 +2,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { firebaseReady } from "@/lib/firebase";
-import { shiftDay, shiftMonth } from "@/lib/expense-utils";
+import { myShare, shiftDay, shiftMonth } from "@/lib/expense-utils";
+import { behaviourInsights } from "@/lib/behaviour-insights";
 
 import { useAuthUser } from "@/hooks/useAuthUser";
 import { useProfile } from "@/hooks/useProfile";
@@ -63,6 +64,7 @@ export default function Home() {
   const [view, setView] = useState("ledger");
   const [filterCategories, setFilterCategories] = useState([]);
   const [filterUsers, setFilterUsers] = useState([]);
+  const [filterPayers, setFilterPayers] = useState([]);
 
   const {
     total,
@@ -88,6 +90,11 @@ export default function Home() {
     setViewDay((d) => shiftDay(d, delta));
   }
 
+  const behaviour = useMemo(
+    () => behaviourInsights(expenses, user?.uid, viewMonth),
+    [expenses, user, viewMonth]
+  );
+
   const isDaily = summaryView === "daily";
   const ledgerGroupedList = isDaily ? dayGroupedList : groupedList;
 
@@ -102,12 +109,22 @@ export default function Home() {
     [recentPeople]
   );
 
+  const payerFilterOptions = useMemo(
+    () => [
+      { uid: user?.uid, label: "Me" },
+      ...recentPeople.map((p) => ({ uid: p.uid, label: p.username, photoURL: p.photoURL })),
+    ],
+    [recentPeople, user]
+  );
+
   // Filtering only trims what's already grouped/sorted for the period, so
   // it can't disagree with the totals or ordering shown above the list —
   // empty groups left behind by a filter are dropped rather than rendered
   // as a blank date heading.
   const filteredGroupedList = useMemo(() => {
-    if (filterCategories.length === 0 && filterUsers.length === 0) return ledgerGroupedList;
+    if (filterCategories.length === 0 && filterUsers.length === 0 && filterPayers.length === 0) {
+      return ledgerGroupedList;
+    }
     return ledgerGroupedList
       .map((group) => ({
         date: group.date,
@@ -123,13 +140,21 @@ export default function Home() {
             );
             if (!matchesSomeone) return false;
           }
+          if (filterPayers.length > 0 && !filterPayers.includes(x.payer)) return false;
           return true;
         }),
       }))
       .filter((group) => group.items.length > 0);
-  }, [ledgerGroupedList, filterCategories, filterUsers]);
+  }, [ledgerGroupedList, filterCategories, filterUsers, filterPayers]);
 
-  const hasActiveFilters = filterCategories.length > 0 || filterUsers.length > 0;
+  const hasActiveFilters =
+    filterCategories.length > 0 || filterUsers.length > 0 || filterPayers.length > 0;
+  const filteredTotal = hasActiveFilters
+    ? filteredGroupedList.reduce(
+        (s, group) => s + group.items.reduce((t, x) => t + myShare(x, user?.uid), 0),
+        0
+      )
+    : null;
   const ledgerEmptyMessage =
     hasActiveFilters && ledgerGroupedList.length > 0
       ? "No expenses match these filters."
@@ -174,6 +199,7 @@ export default function Home() {
             summaryView={summaryView}
             onChangeSummaryView={setSummaryView}
             dayTotal={dayTotal}
+            filteredTotal={filteredTotal}
             dailyBudget={dailyBudget}
             saveDailyBudget={saveDailyBudget}
           />
@@ -185,6 +211,9 @@ export default function Home() {
               userOptions={userFilterOptions}
               filterUsers={filterUsers}
               onChangeUsers={setFilterUsers}
+              payerOptions={payerFilterOptions}
+              filterPayers={filterPayers}
+              onChangePayers={setFilterPayers}
             />
           )}
           <ExpenseList
@@ -209,6 +238,7 @@ export default function Home() {
           maxDaily={maxDaily}
           sixMonthSeries={sixMonthSeries}
           maxSixMonth={maxSixMonth}
+          behaviour={behaviour}
         />
       )}
 

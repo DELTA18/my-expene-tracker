@@ -61,7 +61,6 @@ export function useExpenseForm({ user, categories, categoryByKey, recentPeople, 
       });
       setAmount("");
       setNote("");
-      setDate(todayStr());
       setCategory(categories[0]?.key || "");
       split.resetSplitFields();
       return true;
